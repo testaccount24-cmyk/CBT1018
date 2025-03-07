@@ -1,0 +1,133 @@
+ Note from Sam Golob:
+
+ This sequence of emails is a sort of history to tell you
+ what's going on here.
+
+ This IEFACTRT exit provides A LOT of information that most
+ IEFACTRT exits do not provide.  The original reason for
+ making this exit public, was the hope that someone will go
+ on maintaining it, and will return their modified source
+ code back to PEMCO, so PEMCO would still be able to use it.
+
+ Of course, whoever uses this code would THEMSELVES benefit
+ greatly from its use.
+
+ So here it is a synopsis of my conversation with Dale:
+
+
+     *  *  *  *  *  *  *  *
+
+
+    On Apr 26, 2021, at 1:33 PM, Dale Tyvand (V)
+    <Dale.Tyvand@pemco.com> wrote:
+
+    Sam,
+
+    I'm an old sysprog, 45 years in the business (35 doing
+    contract work) - remembering the CBT tape as an actual tape
+    (round, I think).  I've found it useful on occasion in the
+    past.  Thanks to you and SamK for your efforts to
+    maintain it.
+
+    I've been maintaining our IEFACTRT exit forever - as pretty
+    much the only assembler guy in-house.  I've been tasked
+    with trying to make that exit more maintainable going forward
+    with non-assembler staff.  My options seem to be to:
+
+    Find IEFACTRT source that will be maintained out-of-house
+    going forward - perhaps on the CBT tape? Rewrite the exit in
+    a HLL - if that's even possible - to be maintained in-house.
+    I don't actually see an assembler requirement in the IBM doc
+    though it seems likely.  One possibility is system REXX
+    though I also don't find doc on if that's possible either.
+
+    Our existing exit includes some stats that we find useful
+    including zIIP and zEDC usage.   We'd hate to lose that info.
+
+    Have you any suggestions on possible solutions to my needs?
+
+    Thanks, Dale
+
+     *  *  *  *  *  *  *  *
+
+    Dear Dale,
+
+    I'd have to see a copy of your exit, and what the output looks like.
+    Maybe if we keep it on the CBT tape as "something standard", and if
+    it is not specific to your company, then we could have outside help
+    in maintaining it, because other people are using it.  Sound like
+    a plan?
+
+    All the best of everything to you and your family.
+
+    Sincerely,    Sam
+
+     *  *  *  *  *  *  *  *
+
+ From: Dale Tyvand (V)
+ Sent: Wednesday, April 28, 2021 4:48 PM
+ To: Sam Golob <sbgolob@cbttape.org>
+ Subject: RE: IEFACTRT Futures
+
+ Sam,
+
+ I'm attaching some sample output from our routine.  See the
+ PFSTRTxx messages as well as the flower boxes.  I'm checking
+ with management to see if providing the routine will be a
+ problem.  I'll give you a call when that is known. If Q or
+ comments, please call me.
+
+ Thanks, Dale
+
+     *  *  *  *  *  *  *  *
+
+ Subject:  RE: IEFACTRT Futures
+ From:     "Dale Tyvand (V)" <Dale.Tyvand@pemco.com>
+ Date:     5/10/2021, 6:00 PM
+ To:       Sam Golob <sbgolob@cbttape.org>
+
+ Sam,
+
+ Sorry for not responding to your calls last week but I've had
+ nothing to report.  I'm still pursuing getting management
+ approval on providing the exit and your VMs prompted me to
+ re-issue that request.  Hopefully some word this week - I'll
+ let you know if that happens.
+
+ Regards, Dale
+
+     *  *  *  *  *  *  *  *
+
+ Subject:  RE: IEFACTRT Futures
+ From:     "Dale Tyvand (V)" <Dale.Tyvand@pemco.com>
+ Date:     8/11/2021, 1:50 PM
+ To:       Sam Golob <sbgolob@cbttape.org>
+
+ Sam,
+
+ An XMIT version of a lib is attached containing the source and
+ local assembly proc ASMACL.   A couple things to note:
+
+     The exit makes use of the TCBUSER field to save the address
+     of a local control block, PFSACTRT, to save some accumulated
+     job stats.   Before installation, a shop should verify that
+     field is not already in use in their shop.
+
+     As noted in the comments, the exit makes use of BAKR and PR
+     instructions to save/restore regs.
+
+     As noted in the comments, the exit makes use of 4-byte
+     service unit fields like SMF30CSU rather than more current
+     8-byte fields like SMF30CSU_L.
+
+ I checked with the original author of this code, Scott Pearson,
+ who's still working as a systems programmer, though nearing
+ retirement.  I hired him as a junior sysprog somewhere around
+ 1986 :>).  He was OK leaving his name on it.   My name isn't
+ actually on it though there's a lot of DAT updates.   Feel free
+ to provide it, or not.
+
+ Let me know if Q.
+
+ Take care and stay healthy.   Dale
+
