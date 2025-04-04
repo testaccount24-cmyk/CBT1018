@@ -1,0 +1,2297 @@
+//DATYVATR JOB (P,SS,23010),'IEFACTRT ASSMBY',CLASS=A,
+//       MSGCLASS=R,NOTIFY=&SYSUID
+//*
+//*
+//ASM      EXEC ASMACL,
+//            LPRM='RENT,XREF',
+//            MAC2='SYS1.MODGEN',
+//            MAC3='SYS1.SHASMAC'
+//C.SYSIN   DD  *
+         TITLE '--- IEFACTRT --- SMF JOB AND STEP TERMINATION EXIT'
+***********************************************************************
+**  PROGRAM........IEFACTRT                                          **
+**  DATE WRITTEN...05/02/91                                          **
+**  AUTHOR.........SCOTT PEARSON                                     **
+**  MODIFIED.......DALE TYVAND                                       **
+**                                                                   **
+**  PROGRAM FUNCTION:                                                **
+**                                                                   **
+**  THIS EXIT  PRODUCES THE STEP/JOB TERMINATION  MESSAGES, PFSTRT01 **
+**  AND  PFSTRT02. IT  ALSO CREATES  THE STEP/JOB  TERMINATION BOXES **
+**  WHICH  CONTAIN  VARIOUS  PIECES  OF  INFORMATION.  MOST  OF  THE **
+**  INFORMATION  IS DERIVED  FROM THE  SMF TYPE30,  SUBTYPE 4  AND 5 **
+**  RECORDS.                                                         **
+**                                                                   **
+**  THIS PROGRAM HAS BEEN SPLIT  UP INTO MANY SMALL SUBROUTINES. THE **
+**  SUBROUTINES USE  THE MVS/ESA INSTRUCTIONS "BAKR"  AND "PR". THIS **
+**  ALLOWS EACH  SUBROUTINE THE FULL  USE OF ALMOST  EVERY REGISTER. **
+**  THE ONLY REGISTERS WHICH SHOULD NOT  BE CHANGED ARE R10, R11 AND **
+**  R13.                                                             **
+**                                                                   **
+**  BECAUSE THE  INFORMATION NEEDED TO  CREATE THE WTO  MESSAGES AND **
+**  TERMINATION  BOXES COMES  FROM  MANY  DIFFERENT LOCATIONS,  THIS **
+**  EXIT  WILL FIRST  GATHER  AS MUCH  INFORMATION  AS POSSIBLE  AND **
+**  BRING IT  INTO OUR OWN WORKING  STORAGE AREA. THIS WILL  MAKE IT **
+**  EASIER TO ACCESS THE DATA WHEN  WE ARE BUILDING THE WTO MESSAGES **
+**  AND TERMINATION BOXES.                                           **
+**                                                                   **
+**  THERE ARE TWO DIFFERENT LOGIC  PATHS, DEPENDING ON WHETHER IT IS **
+**  STEP OR JOB TERMINATION.                                         **
+**                                                                   **
+**  JOB/STEP TERMINATION:                                            **
+**    ALLOCATE STORAGE FOR WORKAREA.                                 **
+**    DETERMINE TASK TYPE, BATCH, STC OR TSO,                        **
+**    CHECK SMF RECORD TYPE/SUBTYPE.  WE ONLY PROCESS SMF30 SUB4/5   **
+**    CALCULATE THE ADDRESSES OF THE VARIOUS SMF TYPE 30 SECTIONS    **
+**    VERIFY/ALLOCATE OUR CONTROL BLOCK "PFSACTRT".                  **
+**    COMPUTE SYSIN/SYSOUT/SYSPUNCH TOTALS FROM JES2 CONTROL BLOCK   **
+**    PROCESS STEP COMPLETION CODE.                                  **
+**                                                                   **
+**  STEP TERMINATION:                                                **
+**    ISSUE WTO PFSTRT01.                                            **
+**    BUILD STEP TERMINATION BOX.                                    **
+**                                                                   **
+**  JOB TERMINATION:                                                 **
+**    ISSUE WTO PFSTRT02.                                            **
+**    BUILD JOB TERMINATION BOX.                                     **
+**    FREE OUR CONTROL BLOCK "PFSACTRT"                              **
+**                                                                   **
+**  PARAMETERS:                                                      **
+**                                                                   **
+**  REGISTER USAGE:                                                  **
+**    R0  - WORK REGISTER                                            **
+**    ...                                                            **
+**    R9  - WORK REGISTER                                            **
+**    R10 - BASE REGISTER FOR PROGRAM                                **
+**    R11 - SECOND BASE REGISTER FOR PROGRAM                         **
+**    R12 - WORK REGISTER FOR IEFYS                                  **
+**    R13 - BASE REGISTER FOR WORKAREA                               **
+**    R14 - RETURN ADDRESS                                           **
+**    R15 - ENTRY POINT ADDRESS                                      **
+**                                                                   **
+**                         MODIFICATION LOG                          **
+**  NOTE: 4-BYTE SERVICE UNIT FIELDS LIKE SMF30CSU ARE STILL IN USE  **
+**        RATHER THAN THE MORE CURRENT 8-BYTE SMF30CSU_L.            **
+**                                                                   **
+**    DATE     WHO DESCRIPTION                                       **
+**  ---------- --- ------------------------------------------------  **
+**  03/03/2021 DAT SET HEADING "JOB  ZIIP SECS", NOT STEP     FIX2101**
+**  04/15/2019 DAT ENSURE PFSTRTXX MSGS FROM JOBS (JES2) ONLY FIX1901**
+**  05/19/2016 DAT CLEANUP, DROP USELESS INFO, ADD ZEDC+ZIIP METRICS **
+**  04/22/2016 DAT CORRECT RETURN CODE = R15 3 LOWEST NIBBLES FIX1601**
+**  05/03/2012 DAT DROP WTO'S FOR TSO USERS (IEF170I 3 ERROR) FIX1201**
+**                 ALSO, CORRECT RMODE=ANY IN $MODULE         FIX1201**
+**                 CORRECT X'00' AFTER SYSTEM ABEND CODE      FIX1201**
+**  11/17/2010 JTT UPDATE WTO'S TO ALL HAVE MSGID             FIX1001**
+**                 COMMENT OUT SYSTEMID-SPECIFIC YXXX         FIX1002**
+**  07/18/2008 DAT CORRECT 5 DIGIT RETURN CODES               FIX0801**
+**  02/26/2002 DAT CORRECT LENGTH FOR SMF30EXP UNDER Z/OS     FIX0301**
+**  06/18/2002 DAT ALLOW 5 DIGIT RETURN CODES (FOR FTP)       FIX0201**
+**  01/04/2000 DAT ADD RANGE=ALL TO UCBSCAN TO GET 4-DIGIT UCBFIX0001**
+**  04/08/1999 DAT SKIP VOLSER LOOKUP FOR NON-DASD DEVICES    FIX9901**
+**  12/14/1998 DAT ANY SYSTEM ID BEGINNING WITH "Y" IS YXXX:  FIX9804**
+**  12/14/1998 DAT UCBSCAN MACRO USED TO DETERMINE VOLSER     FIX9803**
+**  12/14/1998 DAT CORRECTIONS FOR TYPE 30 RECS WHICH SPAN    FIX9802**
+**                 MULTIPLE RECORDS.  WILL GET MULTIPLE STEP         **
+**                 TERMINATION BOXES BUT NON-0 STATS WILL BE VALID.  **
+**  07/03/1998 DAT PUT OUT MESSAGE PFSTRT03 WHEN ABEND OCCURS-FIX9801**
+**  12/19/1997 SOP MODIFIED FOR PEMCO                                **
+**                                                                   **
+***********************************************************************
+         EJECT
+*----------------------------------------------------------------------
+* THE FOLLOWING ARE JES MACROS TO SUPPORT THE $SJB AND $JCT
+*----------------------------------------------------------------------
+         COPY $HASPGBL
+SMFACTRT $MODULE ENVIRON=USER,RMODE=ANY,$BUFFER,$HASPEQU,$SJB,$JCT
+         SPACE 3
+         EJECT
+*----------------------------------------------------------------------
+* PROGRAM EQUATES
+*----------------------------------------------------------------------
+SUBPOOL  EQU   255
+         EJECT
+*---------------------------------------------------------------------*
+* PROGRAM CSECT START                                                 *
+*---------------------------------------------------------------------*
+         SPACE
+IEFACTRT $ENTRY CSECT=YES,BASE=15
+IEFACTRT AMODE 31
+IEFACTRT RMODE ANY
+         USING IEFACTRT,R15
+         PRINT GEN
+         SPACE 3
+*---------------------------------------------------------------------*
+* PROGRAM HOUSE KEEPING                                               *
+*---------------------------------------------------------------------*
+         SPACE
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LR    R10,R15                               LOAD BASE REGISTER
+         LA    R11,4095(R10)                                LOAD SECOND
+         LA    R11,1(R11)                              -- BASE REGISTER
+         DROP  R15
+         USING IEFACTRT,R10,R11
+         B     AROUND
+         SPACE
+         DC    C'IEFACTRT'                                 PROGRAM NAME
+         DC    C' &SYSDATE &SYSTIME'             ASSEMBLE DATE AND TIME
+         DC    C' SMF STEP/JOB TERM. EXIT'          A SHORT DESCRIPTION
+         CNOP  0,4                                     ENSURE ALIGNMENT
+AROUND   EQU   *
+         LR    R4,R0                          SAVE ORIGINAL R0 CONTENTS
+         LR    R5,R1                          SAVE ORIGINAL R1 CONTENTS
+         SPACE
+         GETMAIN R,LV=WORKLEN,SP=SUBPOOL
+         LR    R13,R1                              SAVE ADDR OF STORAGE
+         USING WORKAREA,R13
+         SPACE
+*-- CLEAR WORKAREA TO HEX ZEROS
+         LA    R6,WORKAREA                  POINT R6 TO RECEIVING FIELD
+         LA    R7,WORKLEN           SET R7 TO LENGTH OF RECEIVING FIELD
+         LA    R8,WORKAREA                            R8 NOT USED / N/A
+         SR    R9,R9                           ZERO PAD + FROM LENGTH=0
+         MVCL  R6,R8                                     CLEAR WORKAREA
+         SPACE
+         ST    R4,ORGR0SVE                    SAVE ORIGINAL R0 CONTENTS
+         ST    R5,ORGR1SVE                    SAVE ORIGINAL R1 CONTENTS
+         ST    R12,IEFYSADR                     SAVE @ IEFYS MESS. AREA
+         SR    R14,R14          ** DO NOT DELETE **, CLEAR R14 TO ZEROS
+         EJECT
+*---------------------------------------------------------------------*
+* CALL SUBROUTINE TO VERIFY SMF RECORD IS ONE WE WANT TO PROCESS.     *
+*---------------------------------------------------------------------*
+         SPACE
+         BAL   R14,CHECK_SMF_RECORD
+         LTR   R15,R15                       IS SMF RECORD OK?  (R15=0)
+         BNZ   RETURN                                NO, LETS LEAVE NOW
+         SPACE 3
+*---------------------------------------------------------------------*
+* CALL SUBROUTINE TO COMPUTE AND SAVE POINTERS TO THE DIFFERENT       *
+* SECTIONS IN THE SMF RECORD TYPE 30.                                 *
+*---------------------------------------------------------------------*
+         SPACE
+         BAL   R14,GET_SMF_DATA
+         SPACE 3
+*---------------------------------------------------------------------*
+* CALL SUBROUTINE TO GET THE STEP/PROCSTEP NAMES FROM THE CSCB        *
+*---------------------------------------------------------------------*
+         SPACE
+         BAL   R14,GET_STEP_NAMES
+         SPACE 3
+*---------------------------------------------------------------------*
+* IF THIS IS STEP TERMINATION FOR THE FIRST JOB STEP THEN WE NEED     *
+* TO ALLOCATE STORAGE TO HOLD THE VARIOUS COUNTERS, TOTAL BUCKETS     *
+* AND "HIGH WATER" MARKS FOR THE JOB AS A WHOLE.                      *
+* CALL SUBROUTINE TO ALLOCATE/VERIFY PEMCO CONTROL BLOCK "PFSACTRT".  *
+* UPON SUCCESSFUL RETURN, THE ADDRESS OF THE PFSACTRT WILL BE IN THE  *
+* FIELD "USERTRT" AND IN THE TCBUSER FIELD OF THE TCB.                *
+*---------------------------------------------------------------------*
+         SPACE
+         BAL   R14,CHECK_PFSACTRT
+         LTR   R15,R15                          IS PFSACTRT OK? (R15=0)
+         BNZ   RETURN                                NO, LETS LEAVE NOW
+         SPACE 3
+*---------------------------------------------------------------------*
+* CALL SUBROUTINE TO GET SYSIN, SYSOUT AND SYSPUNCH TOTALS            *
+*---------------------------------------------------------------------*
+         SPACE
+         BAL   R14,COMPUTE_SYSIN_SYSOUT
+         SPACE 3
+*---------------------------------------------------------------------*
+* IF STEP TERMINATION, CALL SUBROUTINE TO GET STEP COMPLETION CODE    *
+*---------------------------------------------------------------------*
+         SPACE
+         BAL   R14,GET_COMPLETION_CODE
+         SPACE 3
+*---------------------------------------------------------------------*
+* IF STEP TERMINATION THEN ISSUE WTO PFSTRT01, ELSE IF JOB            *
+* TERMINATION THEN ISSUE WTO PFSTRT02.                                *
+*---------------------------------------------------------------------*
+         CLI   JESID,C'T'                            TSO USER?  FIX1201
+         BE    WTO_DONE                YES, WTO NOT SUPPORTED.  FIX1201
+         CLI   STEPCC+1,C' '           ANY COMPLETION SECTION?  FIX0201
+         BE    WTO_DONE                      NO, SKIP MESSAGES  FIX9802
+         SPACE
+         CLI   TERMTYPE,C'J'                     IS IT JOB TERMINATION?
+         BE    LETS_ISSUE_PFSTRT02               YES, GO ISSUE PFSTRT02
+         SPACE
+         BAL   R14,PFSTRT01_WTO
+         B     WTO_DONE
+         SPACE
+LETS_ISSUE_PFSTRT02 EQU *
+         BAL   R14,PFSTRT02_WTO
+         SPACE
+WTO_DONE EQU *
+         SPACE 3
+*---------------------------------------------------------------------*
+* NOW ITS TIME TO GO BUILD THE TERMINATION BOX.                       *
+*---------------------------------------------------------------------*
+         SPACE
+         LA    R3,PRNTLINE                         LETS CLEAR THE PRINT
+         MVI   0(R3),C' '                            LINE TO SPACES AND
+         MVC   1(LINELGTH-1,R3),0(R3)              WRITE ONE BLANK LINE
+         BAL   R14,PRINT_LINE                        PRINT A BLANK LINE
+         SPACE
+         BAL   R14,BOX_LINE1
+         BAL   R14,BOX_LINE2
+         BAL   R14,BOX_LINE3
+         BAL   R14,BOX_LINE97
+         BAL   R14,BOX_LINE4
+         BAL   R14,BOX_LINE96
+         BAL   R14,BOX_LINE5
+         BAL   R14,BOX_LINE6
+         BAL   R14,BOX_LINE7
+         BAL   R14,BOX_LINE8
+         BAL   R14,BOX_LINE9
+         BAL   R14,BOX_LINE10
+         BAL   R14,BOX_LINE11
+         BAL   R14,BOX_LINE12
+         BAL   R14,BOX_LINE13
+         SPACE
+         CLI   TERMTYPE,C'J'                     IS IT JOB TERMINATION?
+         BE    BOX_LINE_LAST                           YES, WE ARE DONE
+         SPACE
+         BAL   R14,BOX_LINE97
+         BAL   R14,BOX_LINE_EXCP_UNIT
+         BAL   R14,BOX_LINE98
+         SPACE
+         L     R8,STPDEVTB                    GET @ TO STEP ACCUM TABLE
+         LTR   R8,R8                     IS STEP ACCUM TABLE ALLOCATED?
+         BZ    BOX_LINE_LAST                       NO, BYPASS NEXT STEP
+         BAL   R14,BOX_LINE_EXCP_TYPE
+         SPACE
+BOX_LINE_LAST EQU *
+         BAL   R14,BOX_LINE99
+         SPACE
+         CLI   TERMTYPE,C'J'                     IS IT JOB TERMINATION?
+         BNE   RETURN                                 NO, SKIP FREEMAIN
+         SPACE
+         L     R5,USERTRT                       GET ADDRESS OF PFSACTRT
+         FREEMAIN R,LV=PFSACTLG,A=(R5),SP=SUBPOOL
+         LA    R9,0                                      POINTER TO PSA
+         USING PSA,R9                                       MAP THE PSA
+         L     R9,PSATOLD                                POINTER TO TCB
+         DROP  R9
+         USING TCB,R9                                       MAP THE TCB
+         SR    R5,R5                                  CLEAR R5 TO ZEROS
+         ST    R5,TCBUSER                           CLEAR TCBUSER FIELD
+         DROP  R9
+         SPACE
+         EJECT
+*---------------------------------------------------------------------*
+* PROGRAM CLEAN-UP                                                    *
+*---------------------------------------------------------------------*
+RETURN   EQU   *
+         L     R5,STPDEVTB                           @ TO ACCUM STORAGE
+         LTR   R5,R5                        HAS STORAGE BEEN ALLOCATED?
+         BZ    RETURN1                      NO, SKIP FREEMAIN
+         FREEMAIN R,LV=DEVTABLE_LGTH,A=(R5),SP=SUBPOOL
+         SPACE
+RETURN1  EQU   *
+         SPACE
+         FREEMAIN R,LV=WORKLEN,A=(R13),SP=SUBPOOL
+         SPACE
+         SR    R15,R15                                  PUT RC INTO R15
+         SR    R1,R1                                           SET R1=0
+         PR                                                      RETURN
+         EJECT
+*====================================================================*
+*====================================================================*
+*==                                                                ==*
+*== THE  FOLLOWING  ARE  SUBROUTINES   WHICH  ARE  CALLED  BY  THE ==*
+*== MAINLINE CODE.  THESE ROUTINES SHOULD ADHERE  TO THE FOLLOWING ==*
+*== CONVENTIONS.                                                   ==*
+*==                                                                ==*
+*== USE  THE "BAKR"  &  "PR" INSTRUCTIONS  FOR  ROUTINE ENTRY  AND ==*
+*== EXIT. THESE  INSTRUCTIONS WILL  SAVE THE  CALLERS STATUS  IN A ==*
+*== LINKAGE STACK. THIS ALLOWS THE  SUBROUTINE TO USE ANY REGISTER ==*
+*== FOR  WHATEVER PURPOSE  IT NEEDS  WITHOUT INTERFERING  WITH THE ==*
+*== CALLERS ENVIRONMENT.  USE OF THE  BAKR & PR  INSTRUCTIONS DOES ==*
+*== NOT RESTORE REGISTERS  0, 1 AND 15.  THEREFORE THESE REGISTERS ==*
+*== CAN BE USED TO PASS INFORMATION  BACK TO THE CALLER. ALSO, THE ==*
+*== CALLER MUST BE AWARE THAT THESE  REGISTERS MAY NOT BE THE SAME ==*
+*== WHEN CONTROL RETURNS TO THE CALLER.                            ==*
+*==                                                                ==*
+*== MANY OF  THE FOLLOWING SUBROUTINES  WILL RETURN EITHER  A ZERO ==*
+*== OR  FOUR IN  R15.  A  VALUE OF  FOUR  IMPLIES THAT  PROCESSING ==*
+*== SHOULD TERMINATE.                                              ==*
+*==                                                                ==*
+*== ONE OTHER  POINT IS THAT  R10, R11 &  R13 ARE THE  ONLY GLOBAL ==*
+*== REGISTERS WHICH  SHOULD NOT  BE CHANGED. R10  AND R11  ARE THE ==*
+*== BASE REGISTERS  FOR THE PROGRAM  AND R13 IS THE  BASE REGISTER ==*
+*== TO WORKING STORAGE.                                            ==*
+*==                                                                ==*
+*====================================================================*
+*====================================================================*
+         EJECT
+CHECK_SMF_RECORD EQU *
+*---------------------------------------------------------------------*
+*  THIS EXIT ONLY USES INFORMATION SUPPLIED IN SMF TYPE 30, SUBTYPE   *
+*  4 & 5 RECORDS.                                                     *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - POINTER TO LIST OF ADDRESSES                               *
+*    R4  - POINTER TO SMF RECORD                                      *
+*    R5  - WORK REGISTER                                              *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         L     R3,ORGR1SVE                     GET ORIGINAL R1 CONTENTS
+         USING R1PARMS,R3
+*   THE FOLLOWING LOGIC IS TO AVOID GENERATING PFSTRTXX MSGS    FIX1901
+*   FOR OMVS ADDRESS SPACES.                                    FIX1901
+         L     R4,R1SUBSYS                    GET PTR TO SUBSYS FIX1901
+         CLC   =C'JES2',0(R4)                   JES2 SUBSYSTEM? FIX1901
+         BNE   SMF_REC_RETURN4    NO, NOT AN SMF RECORD WE WANT FIX1901
+*
+         L     R4,R1SMFREC                              @ TO SMF RECORD
+         USING SMFRCD30,R4
+         SPACE
+         CLI   SMF30RTY,X'1E'               IS THIS SMF RECORD TYPE 30?
+         BNE   SMF_REC_RETURN4            NO, NOT AN SMF RECORD WE WANT
+         SPACE
+         MVC   SYSTEMID,SMF30SID                         SAVE SYSTEM ID
+         SPACE
+         LH    R5,SMF30SON                GET NUMBER OF SUBSYS SECTIONS
+         LTR   R5,R5                    ARE THERE ZERO SUBSYS SECTIONS?
+         BZ    SMF_REC_RETURN4                      YES, LETS LEAVE NOW
+         L     R5,SMF30SOF                 GET OFFSET TO SUBSYS SECTION
+         AR    R5,R4                                   ADD BASE ADDRESS
+         USING SMF30PSS,R5
+         LA    R6,4                             LETS TEST FOR SUBTYPE 4
+         CH    R6,SMF30TYP                             IS IT SUBTYPE 4?
+         BE    SMF_SUBTYPE_4         YES, LETS DO ADDITIONAL PROCESSING
+         LA    R6,5                             LETS TEST FOR SUBTYPE 5
+         CH    R6,SMF30TYP                             IS IT SUBTYPE 5?
+         BE    SMF_SUBTYPE_5         YES, LETS DO ADDITIONAL PROCESSING
+         B     SMF_REC_RETURN4                   NOT AN SUBTYPE WE WANT
+         SPACE
+SMF_SUBTYPE_4 EQU *
+         MVI   TERMTYPE,C'S'                  SET STEP TERMINATION FLAG
+         MVC   BOX_CHAR,STEPCHAR                    INIT BOX_CHAR FIELD
+         B     SMF_REC_RETURN0                           LETS LEAVE NOW
+         SPACE
+SMF_SUBTYPE_5 EQU *
+         MVI   TERMTYPE,C'J'                   SET JOB TERMINATION FLAG
+         MVC   BOX_CHAR,JOBCHAR                     INIT BOX_CHAR FIELD
+         B     SMF_REC_RETURN0                           LETS LEAVE NOW
+         SPACE
+SMF_REC_RETURN4 EQU *
+         LA    R15,4                          INDICATE EXIT TERMINATION
+         B     CHECK_SMF_RECORD_END
+SMF_REC_RETURN0 EQU *
+         LA    R15,0                             INDICATE EXIT CONTINUE
+CHECK_SMF_RECORD_END EQU *
+         DROP  R3
+         DROP  R4
+         DROP  R5
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+GET_SMF_DATA EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL GATHER ALL THE INFORMATION WHICH IS IN THE SMF    *
+* RECORD.  IT WILL STORE THE INFO IN WORKING STORAGE IN A FORM        *
+* MORE USEFUL TO THE WTO/BOX ROUTINES.                                *
+*                                                                     *
+* THE COMPLETION AND EXCP SECTIONS WILL BE PROCESSED IN OTHER         *
+* SUBOUTINES.                                                         *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R4  - POINTER TO DIFFERENT SMF RECORD SECTIONS                   *
+*    R5  - BASE POINTER TO SMF RECORD                                 *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         L     R5,ORGR1SVE                     GET ORIGINAL R1 CONTENTS
+         USING R1PARMS,R5
+         L     R5,R1SMFREC                              @ TO SMF RECORD
+         DROP  R5
+         USING SMFRCD30,R5
+         EJECT
+*---------------------------------------------------------------------*
+*  PROCESS THE IDENTIFICATION SECTION                                 *
+*---------------------------------------------------------------------*
+         SPACE
+         SR    R15,R15             ZERO FOR COUNT               FIX9802
+         ICM   R15,B'0011',SMF30ION GET COUNT OF IDENT FIELDS   FIX9802
+         BZ    NO_SMF_IDENT        IT'S ZERO - NO FIELDS        FIX9802
+         L     R4,SMF30IOF                LOAD OFFSET TO IDENT. SECTION
+         LTR   R4,R4                                IS OFFSET NON-ZERO?
+         BNZ   GET_SMF_IDENT_SECTION          OFFSET NON-ZERO, CONTINUE
+NO_SMF_IDENT EQU  *                                             FIX9802
+*FIX9802 WTO   'PFSTRT10 - 001, NO IDENT. SECTION IN SMF RECORD'
+         B     GET_SMF_IDENT_END                    SKIP IDENT. SECTION
+         SPACE
+GET_SMF_IDENT_SECTION EQU *
+         AR    R4,R5                                   ADD BASE ADDRESS
+         USING SMF30ID,R4                        MAP THE IDENT. SECTION
+         MVC   JOBNAME,SMF30JBN                           SAVE JOB NAME
+         MVC   PGMNAME,SMF30PGM                           SAVE PGM NAME
+         MVC   JESID,SMF30JNM                              SAVE JES2 ID
+         SPACE
+*-- JOBCLASS IS DEFINED AS AN EIGHT BYTE FIELD.  THIS IS TO SUPPORT
+*-- NEW JES CLASSES WHICH WILL BE EIGHT BYTES IN LENGTH.
+*-- THIS IS COMING IN THE FUTURE.  SOMEDAY AN EIGHT BYTE CLASS FIELD
+*-- WILL BE ADDED TO THE IDENTIFICATION SECTION.
+         MVC   JOBCLASS,=CL8'        '                  CLEAR TO SPACES
+         MVC   JOBCLASS(1),SMF30CLS                      SAVE JOB CLASS
+         SPACE
+         MVC   STEPNUM,SMF30STN                        SAVE STEP NUMBER
+         MVC   PERFGRP,SMF30PGN           SAVE PERFORMANCE GROUP NUMBER
+         SPACE
+*-- COMPUTE DEVICE ALLOCATION TIME (IN HUNDREDTHS OF A SECOND)
+         SR    R6,R6                                SETUP DEFAULT VALUE
+         ST    R6,DEVALLOC                           SAVE DEFAULT VALUE
+         CLC   SMF30AST,=F'0'           IS DEVICE ALLOC STRT TIME ZERO?
+         BE    GET_SMF_IDENT_END                 YES, USE DEFAULT VALUE
+         CLC   SMF30PPS,=F'0'             IS PRBLM PRGM STRT TIME ZERO?
+         BE    GET_SMF_IDENT_END                 YES, USE DEFAULT VALUE
+         L     R6,SMF30PPS                       GET PRB-PGM START TIME
+         S     R6,SMF30AST              SUBTRACT DEV. ALLOC. START TIME
+         ST    R6,DEVALLOC                        SAVE DEV. ALLOC. TIME
+         SPACE
+*-- COMPUTE ELAPSED STEP EXECUTION TIME
+         TIME  BIN                     GET CURRENT TIME IN HUNDREDS/SEC
+         ST    R1,TIMEEND                   SAVE DATE IN TIME END FIELD
+         ST    R0,TIMEEND+4                 SAVE TIME IN TIME END FIELD
+         MVC   TIMESTRT(4),SMF30STD        SAVE SMF DATE IN START FIELD
+         MVC   TIMESTRT+4(4),SMF30SIT      SAVE SMF TIME IN START FIELD
+         BAL   R14,COMPUTE_ELAPSED_TIME
+         MVC   ELAPSEDT,TIMEELAP           SAVE ELAPSED WALL CLOCK TIME
+         SPACE
+GET_SMF_IDENT_END EQU *
+         EJECT
+*---------------------------------------------------------------------*
+*  PROCESS THE I/O ACTIVITY SECTION                                   *
+*---------------------------------------------------------------------*
+         SPACE
+         SR    R15,R15             ZERO FOR COUNT               FIX9802
+         ICM   R15,B'0011',SMF30UON GET COUNT                   FIX9802
+         BZ    NO_SMF_IOACTIV      IT'S ZERO - FLAG IT          FIX9802
+         L     R4,SMF30UOF             LOAD OFFSET TO I/O ACTIV SECTION
+         LTR   R4,R4                                IS OFFSET NON-ZERO?
+         BNZ   GET_SMF_IOACTIV_SECTION        OFFSET NON-ZERO, CONTINUE
+NO_SMF_IOACTIV EQU  *                                           FIX9802
+*FIX9802 WTO   'PFSTRT10 - 002, NO I/O ACTIV SECTION IN SMF RECORD'
+         B     GET_SMF_IOACTIV_END               SKIP I/O ACTIV SECTION
+         SPACE
+GET_SMF_IOACTIV_SECTION EQU *
+         AR    R4,R5                                   ADD BASE ADDRESS
+         DROP  R4
+         USING SMF30URA,R4                    MAP THE I/O ACTIV SECTION
+         MVC   STPSYSI,SMF30INP             COUNT OF CARD-IMAGE RECORDS
+         SPACE
+GET_SMF_IOACTIV_END EQU *
+         EJECT
+*---------------------------------------------------------------------*
+*  PROCESS THE PROCESSOR ACCOUNTING SECTION                           *
+*---------------------------------------------------------------------*
+         SPACE
+         SR    R15,R15             ZERO FOR COUNT               FIX9802
+         ICM   R15,B'0011',SMF30CON GET COUNT                   FIX9802
+         BZ    NO_SMF_PROCESSOR    IT'S ZERO - FLAG IT          FIX9802
+         L     R4,SMF30COF             LOAD OFFSET TO PROCESSOR SECTION
+         LTR   R4,R4                                IS OFFSET NON-ZERO?
+         BNZ   GET_SMF_PROCESSOR_SECTION      OFFSET NON-ZERO, CONTINUE
+NO_SMF_PROCESSOR EQU  *                                         FIX9802
+*FIX9802 WTO   'PFSTRT10 - 003, NO PROCESSOR SECTION IN SMF RECORD'
+         B     GET_SMF_PROCESSOR_END             SKIP PROCESSOR SECTION
+         SPACE
+GET_SMF_PROCESSOR_SECTION EQU *
+         AR    R4,R5                                   ADD BASE ADDRESS
+         DROP  R4
+         USING SMF30CAS,R4                    MAP THE PROCESSOR SECTION
+         MVC   DPRTY,SMF30PTY                      DISPATCHING PRIORITY
+         MVC   SCPUTCB,SMF30CPT                       STEP CPU/TCB SECS
+         MVC   SCPUSRB,SMF30CPS                       STEP CPU/SRB SECS
+         MVC   ICPUTCB,SMF30ICU                       INIT CPU/TCB SECS
+         MVC   ICPUSRB,SMF30ISB                       INIT CPU/SRB SECS
+         MVC   ZIIPSECS,SMF30_TIME_ON_ZIIP               STEP ZIIP SECS
+         SPACE
+GET_SMF_PROCESSOR_END EQU *
+         EJECT
+*---------------------------------------------------------------------*
+*  PROCESS THE STORAGE & PAGING SECTION                               *
+*---------------------------------------------------------------------*
+         SPACE
+         SR    R15,R15             ZERO FOR COUNT               FIX9802
+         ICM   R15,B'0011',SMF30RON GET COUNT                   FIX9802
+         BZ    NO_SMF_STORAGE      IT'S ZERO - FLAG IT          FIX9802
+         L     R4,SMF30ROF               LOAD OFFSET TO STORAGE SECTION
+         LTR   R4,R4                                IS OFFSET NON-ZERO?
+         BNZ   GET_SMF_STORAGE_SECTION        OFFSET NON-ZERO, CONTINUE
+NO_SMF_STORAGE   EQU  *                                         FIX9802
+*FIX9802 WTO   'PFSTRT10 - 004, NO STORAGE SECTION IN SMF RECORD'
+         B     GET_SMF_STORAGE_END               SKIP STORAGE SECTION
+         SPACE
+GET_SMF_STORAGE_SECTION EQU *
+         AR    R4,R5                                   ADD BASE ADDRESS
+         DROP  R4
+         USING SMF30SAP,R4                      MAP THE STORAGE SECTION
+         MVC   AUXPAGEI,SMF30PGI                           AUX PAGE INS
+         MVC   AUXPAGEO,SMF30PGO                          AUX PAGE OUTS
+         MVC   PAGEINS,SMF30PSI                        PAGES SWAPPED IN
+         MVC   PAGEOUTS,SMF30PSO                      PAGES SWAPPED OUT
+         MVC   PHYSWAP,SMF30NSW                          PHYSICAL SWAPS
+         MVC   RGNSTRG,SMF30RGN                             REGION SIZE
+         MVC   DSPCSTRG,SMF30DSV                      DATASPACE STORAGE
+         SPACE
+*-- COMPUTE TOTAL USER STORAGE ALLOCATED
+         L     R6,SMF30URB                             USER STRG < 16MB
+         A     R6,SMF30EUR                         ADD USER STRG > 16MB
+         SRDA  R6,32                               PREPARE FOR DIVISION
+         LA    R8,1024                              CONVERT TO 1K UNITS
+         DR    R6,R8                                     DIVIDE BY 1024
+         ST    R7,USERSTRG                            SAVE USER STORAGE
+         SPACE
+*-- COMPUTE TOTAL SYSTEM STORAGE ALLOCATED
+         L     R6,SMF30ARB                           SYSTEM STRG < 16MB
+         A     R6,SMF30EAR                       ADD SYSTEM STRG > 16MB
+         SRDA  R6,32                               PREPARE FOR DIVISION
+         LA    R8,1024                              CONVERT TO 1K UNITS
+         DR    R6,R8                                     DIVIDE BY 1024
+         ST    R7,SYSSTRG                           SAVE SYSTEM STORAGE
+         SPACE
+GET_SMF_STORAGE_END EQU *
+         EJECT
+*---------------------------------------------------------------------*
+*  PROCESS THE PERFORMANCE SECTION                                    *
+*---------------------------------------------------------------------*
+         SPACE
+         SR    R15,R15             ZERO FOR COUNT               FIX9802
+         ICM   R15,B'0011',SMF30PON GET COUNT                   FIX9802
+         BZ    NO_SMF_PERFORMANCE  IT'S ZERO - FLAG IT          FIX9802
+         L     R4,SMF30POF           LOAD OFFSET TO PERFORMANCE SECTION
+         LTR   R4,R4                                IS OFFSET NON-ZERO?
+         BNZ   GET_SMF_PERFORMANCE_SECTION    OFFSET NON-ZERO, CONTINUE
+NO_SMF_PERFORMANCE EQU  *                                       FIX9802
+*FIX9802 WTO   'PFSTRT10 - 005, NO PERFORMANCE SECTION IN SMF RECORD'
+         B     GET_SMF_PERFORMANCE_END         SKIP PERFORMANCE SECTION
+         SPACE
+GET_SMF_PERFORMANCE_SECTION EQU *
+         AR    R4,R5                                   ADD BASE ADDRESS
+         DROP  R4
+         USING SMF30PRF,R4                  MAP THE PERFORMANCE SECTION
+         MVC   CPUSRVC,SMF30CSU                       CPU SERVICE UNITS
+         MVC   SRBSRVC,SMF30SRB                       SRB SERVICE UNITS
+         MVC   IOSRVC,SMF30IO                          IO SERVICE UNITS
+         MVC   MSOSRVC,SMF30MSO                       MSO SERVICE UNITS
+         MVC   TOTSRVC,SMF30SRV                     TOTAL SERVICE UNITS
+         SPACE
+GET_SMF_PERFORMANCE_END EQU *
+         EJECT
+*---------------------------------------------------------------------*
+*  PROCESS THE ZEDC USAGE SECTION                                     *
+*---------------------------------------------------------------------*
+                                   SPACE
+         SR    R15,R15             ZERO FOR COUNT               FIX9802
+         ICM   R15,B'0011',SMF30USN GET COUNT OF ZEDC SETIONS
+         BZ    GET_SMF_ZEDC_END                    SKIP STORAGE SECTION
+         L     R4,SMF30USO                  LOAD OFFSET TO ZEDC SECTION
+         LTR   R4,R4                                IS OFFSET NON-ZERO?
+         BZ    GET_SMF_ZEDC_END                       SKIP ZEDC SECTION
+                                   SPACE
+GET_SMF_ZEDC_SECTION EQU *
+         AR    R4,R5                                   ADD BASE ADDRESS
+         DROP  R4
+         USING SMF30USS,R4                      MAP THE STORAGE SECTION
+         MVC   EDCCMPRQ,SMF30_US_COMPRREQ+4        COMPRESSION REQUESTS
+         LM    R14,R15,SMF30_US_QUEUETIME        QUEUE TIME (MICROSECS)
+         D     R14,=F'10000'                 /10000 = HUNDREDTHS OF SEC
+         ST    R15,EDCCMPQT                       SAVE HUNDRETHS OF SEC
+         LM    R14,R15,SMF30_US_EXECTIME          EXEC TIME (MICROSECS)
+         D     R14,=F'10000'                 /10000 = HUNDREDTHS OF SEC
+         ST    R15,EDCCMPXT                       SAVE HUNDRETHS OF SEC
+         LM    R14,R1,SMF30_US_DEFLATESTATS  GET DATA-IN+COMPRESSD OUT  UT
+         SRDL  R14,20              GET GB*1048 IN R15
+         LA    R15,5(R15)          +5 FOR ROUNDING
+         D     R14,=F'10'          /10 = GB*100
+         ST    R15,EDCUCMPI        SAVE UNCOMPRESSED IN
+         SRDL  R0,20               GET GB*2048 IN R1
+         LA    R1,5(R1)            +5 FOR ROUNDING
+         D     R0,=F'10'           /10 = GB*100
+         ST    R1,EDCCMPO          SAVE COMPRESSED OUT
+                                   SPACE
+         LM    R14,R1,SMF30_US_INFLATESTATS  GET COMPRESSD-IN+DATA OUT  UT
+         SRDL  R14,20              GET GB*1048 IN R15
+         LA    R15,5(R15)          +5 FOR ROUNDING
+         D     R14,=F'10'          /10 = GB*100
+         ST    R15,EDCCMPI         SAVE COMPRESSED IN
+         SRDL  R0,20               GET GB*2048 IN R1
+         LA    R1,5(R1)            +5 FOR ROUNDING
+         D     R0,=F'10'           /10 =GB/100
+         ST    R1,EDCUCMPO         SAVE UNCOMPRESSED OUT
+                                   SPACE
+GET_SMF_ZEDC_END EQU *
+         EJECT
+         DROP  R4
+         DROP  R5
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+GET_STEP_NAMES EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL GET THE JOB STEP AND THE PROC STEP FROM THE CSCB. *
+* IN THE ASCB IS A POINTER TO THE JOBNAME.  THE JOB/TASK NAME WILL BE *
+* FOUND IN EITHER ASCBJBNI OR ASCBJBNS.                               *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R1  - USED TO CHAIN TO THE CSCB                                  *
+*    R5  - BASE POINTER TO SMF RECORD                                 *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         MVC   JOBSTEP,=CL8'        '                  INITIALIZE FIELD
+         MVC   PROCSTEP,=CL8'        '                 INITIALIZE FIELD
+         SPACE
+         LA    R9,0                                      POINTER TO PSA
+         USING PSA,R9                                       MAP THE PSA
+         L     R1,PSAAOLD                   GET ADDRESS OF CURRENT ASCB
+         L     R1,ASCBJBNI-ASCB(,R1)              GET ADDRESS OF CHNAME
+         LTR   R1,R1                                          BATCH JOB
+         BNZ   GOTASCB                                       YES, GO ON
+         L     R1,PSAAOLD                                   RELOAD ASCB
+         L     R1,ASCBJBNS-ASCB(,R1)                   GET STC/MOUNT ID
+         LTR   R1,R1                                        IS IT VALID
+         BNZ   NOASCB                                    NO, LETS LEAVE
+GOTASCB  EQU   *
+         LA    R0,CHNAME-CSCX                         GET CHNAME OFFSET
+         SLR   R1,R0                                   GET CSCX ADDRESS
+         L     R1,CHCSCBP-CSCX(,R1)                    GET CSCB ADDRESS
+         USING CSCB,R1
+         MVC   JOBSTEP,CHSTEP                    SAVE JOBSTEP FROM CSCB
+         MVC   PROCSTEP,CHPROCSN                SAVE PROCSTEP FROM CSCB
+         DROP  R1
+         DROP  R9
+NOASCB   EQU   *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+CHECK_PFSACTRT EQU *
+*---------------------------------------------------------------------*
+*  IF THIS IS THE FIRST STEP THEN WE WILL ALLOCATE THE PFSACTRT,      *
+*  OTHERWISE WE WILL JUST VERIFY THAT IT HAS BEEN ALLOCATED.          *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R4  - WORK REGISTER                                              *
+*    R5  - WORK REGISTER                                              *
+*    R9  - MAPS THE TCB                                               *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R9,0                                      POINTER TO PSA
+         USING PSA,R9                                       MAP THE PSA
+         L     R9,PSATOLD                                POINTER TO TCB
+         DROP  R9
+         USING TCB,R9                                       MAP THE TCB
+         SPACE
+         USING PFSACTRT,R4                             MAP THE PFSACTRT
+         L     R4,TCBUSER                       GET POINTER TO PFSACTRT
+         LTR   R4,R4                                   IS ADDRESS ZERO?
+         BNZ   PFSACTRT_SKIP_ALLOCATION             NO, SKIP ALLOCATION
+         GETMAIN R,LV=PFSACTLG,SP=SUBPOOL
+         LR    R4,R1                                      COPY R1 TO R4
+         XC    0(PFSACTLG,R4),0(R4)                     CLEAR TO X'00'S
+         MVC   0(8,R4),=C'PFSACTRT'                        INIT WITH ID
+         MVC   JOBMAXCE,=CL5'00000'                       INIT JOBMAXCE
+         MVC   MAXCCSTP,=H'1'                             INIT MAXCCSTP
+         ST    R4,TCBUSER                       SAVE POINTER IN THE TCB
+         SPACE
+PFSACTRT_SKIP_ALLOCATION EQU *
+         CLC   PFSACTID,=C'PFSACTRT'     IS IT REALLY OUR CONTROL BLOCK
+         BE    CHECK_PFSACTRT_RETURN0                YES, LETS CONTINUE
+         WTO   'PFSTRT11 - 001, UNIDENTIFIED HEADER IN CONTROL BLOCK PFX
+               SACTRT, IEFACTRT IS TERMINATING'
+         B     CHECK_PFSACTRT_RETURN4                    LETS LEAVE NOW
+         SPACE
+CHECK_PFSACTRT_RETURN4 EQU *
+         LA    R15,4                          INDICATE EXIT TERMINATION
+         B     CHECK_PFSACTRT_END
+CHECK_PFSACTRT_RETURN0 EQU *
+         ST    R4,USERTRT             SAVE PFSACTRT POINTER IN OUR AREA
+         LA    R15,0                             INDICATE EXIT CONTINUE
+CHECK_PFSACTRT_END EQU *
+         DROP  R4
+         DROP  R9
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+COMPUTE_SYSIN_SYSOUT EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL EXTRACT JCTLINES AND JCTPUNCH FROM                *
+* THE JES2 CONTROL BLOCK $JCT.  THESE VALUES ARE JOB TOTAL VALUES.    *
+* THEREFORE, IF STEP TERMINATION, WE MUST SUBTRACT THE PREVIOUS       *
+* VALUES FROM THE CURRENT VALUES TO GET THE STEP TOTALS.  IF JOB      *
+* TERMINATION WE CAN SIMPLY USE THE VALUES IN THE $JCT.               *
+*                                                                     *
+* UPON ENTRY TO THIS EXIT, R12 POINTS TO AN "LCT" CONTROL BLOCK.      *
+* THE CONTENTS OF R12 WERE SAVED IN "IEFYSADR" DURING PROGRAM         *
+* INITIALIZATION.  WE MUST USE THIS CONTROL BLOCK TO GET TO THE       *
+* CORRECT $JCT WHERE OUR SYSIN/SYSOUT/SYSPUNCH TOTALS ARE KEPT.       *
+*                                                                     *
+* THE CONTROL BLOCKS WE WILL USE ARE AS FOLLOWS:                      *
+*   THE LCT  IS CONNECTED TO THE JSCB                                 *
+*   THE JSCB IS CONNECTED TO THE SSIB                                 *
+*   THE SSIB IS CONNECTED TO THE $SJB                                 *
+*   THE $SJB IS CONNECTED TO THE $JCT  (WE FINALLY MADE IT!!)         *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - WORK REGISTER                                              *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         L     R3,IEFYSADR                           GET POINTER TO LCT
+         LTR   R3,R3                                  IS POINTER VALID?
+         BNZ   LCT_CHECK2                                 YES, CONTINUE
+         WTO   'PFSTRT12 - 001, INVALID LCT POINTER'
+         B     COMPUTE_SYSIN_SYSOUT_END
+LCT_CHECK2 EQU *
+         USING LCT,R3                                       MAP THE LCT
+         CLC   LCTLABEL,=C'ENDOFLCT'         DO WE REALLY HAVE THE LCT?
+         BE    LCT_IS_OK                                  YES, CONTINUE
+         WTO   'PFSTRT12 - 002, LCT NOT VERIFIED'
+         B     COMPUTE_SYSIN_SYSOUT_END
+LCT_IS_OK EQU *
+         L     R3,LCTJSCB                               POINTER TO JSCB
+         DROP  R3
+         USING IEZJSCB,R3                                  MAP THE JSCB
+         SPACE
+         L     R3,JSCBSSIB                              POINTER TO SSIB
+         DROP  R3
+         USING SSIB,R3                                     MAP THE SSIB
+         SPACE
+*-- TASKS WHICH RUN AS A MASTER SUBSYSTEM WILL NOT HAVE POINTERS INTO
+*-- THE JES2 SUBSYSTEM
+         L     R3,SSIBSUSE                              POINTER TO $SJB
+         LTR   R3,R3                          IS POINTER TO $SJB VALID?
+         BZ    COMPUTE_SYSIN_SYSOUT_END     NO, MUST BE A MASTER SUBSYS
+         SPACE
+         DROP  R3
+         USING SJB,R3                                      MAP THE $SJB
+         L     R3,SJBJCT                                POINTER TO $JCT
+         LTR   R3,R3                          IS POINTER TO $JCT VALID?
+         BZ    COMPUTE_SYSIN_SYSOUT_END     NO, MUST BE A MASTER SUBSYS
+         DROP  R3
+         USING JCT,R3                                      MAP THE $JCT
+         SPACE
+         CLI   TERMTYPE,C'S'                    IS IT STEP TERMINATION?
+         BE    COMPUTE_STEP_TOTALS              YES, DO STEP PROCESSING
+         SPACE
+*-- THESE INSTRUCTIONS WILL BE EXECUTED AT JOB TERMINATION
+         L     R5,JCTLINES                             JOB SYSOUT COUNT
+         ST    R5,STPSYSO                         SAVE JOB SYSOUT COUNT
+         L     R5,JCTPUNCH                           JOB SYSPUNCH COUNT
+         ST    R5,STPSYSP                       SAVE JOB SYSPUNCH COUNT
+         B     COMPUTE_SYSIN_SYSOUT_END                 WE ARE NOW DONE
+         SPACE
+COMPUTE_STEP_TOTALS EQU *
+         L     R4,USERTRT                           POINTER TO PFSACTRT
+         USING PFSACTRT,R4                             MAP THE PFSACTRT
+         SPACE
+         L     R5,JCTLINES                     GET CURRENT SYSOUT COUNT
+         L     R6,SYSOUT                      GET PREVIOUS SYSOUT COUNT
+         ST    R5,SYSOUT                      SAVE CURRENT SYSOUT COUNT
+         SR    R5,R6                          COMPUTE STEP SYSOUT COUNT
+         ST    R5,STPSYSO                        SAVE STEP SYSOUT COUNT
+         SPACE
+         L     R5,JCTPUNCH                   GET CURRENT SYSPUNCH COUNT
+         L     R6,SYSPUNCH                  GET PREVIOUS SYSPUNCH COUNT
+         ST    R5,SYSPUNCH                  SAVE CURRENT SYSPUNCH COUNT
+         SR    R5,R6                        COMPUTE STEP SYSPUNCH COUNT
+         ST    R5,STPSYSP                      SAVE STEP SYSPUNCH COUNT
+         SPACE
+COMPUTE_SYSIN_SYSOUT_END EQU *
+         DROP  R3
+         DROP  R4
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+GET_COMPLETION_CODE EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL UNPACK THE STEP COMPLETION CODE AND STORE ITS     *
+* EBCDIC VALUE IN THE VARIABLE "STEPCC".  THIS ROUTINE WILL ALSO      *
+* CHECK TO SEE IF THIS IS THE HIGHEST COMPLETION CODE.  IF IT IS      *
+* THEN THIS STEP NUMBER AND STEP COMPLETION CODE WILL BE SAVED IN     *
+* THE PFSACTRT CONTROL BLOCK.                                         *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         MVC   STEPCC,=CL5'    '        CLEAR STEPCC TO SPACES  FIX9802
+         L     R5,ORGR1SVE                     GET ORIGINAL R1 CONTENTS
+         USING R1PARMS,R5
+         L     R5,R1SMFREC                              @ TO SMF RECORD
+         DROP  R5
+         USING SMFRCD30,R5
+         SR    R15,R15             ZERO FOR COUNT               FIX9802
+         ICM   R15,B'0011',SMF30TON GET COUNT                   FIX9802
+         BZ    NO_COMPLETION_CODE  IT'S ZERO - FLAG IT          FIX9802
+         L     R3,SMF30TOF                LOAD OFFSET TO COMPL. SECTION
+         LTR   R3,R3                                    IS OFFSET ZERO?
+         BNZ   GET_COMPL_CONT1                        NO, LETS CONTINUE
+NO_COMPLETION_CODE EQU  *                                       FIX9802
+*FIX9802 WTO   'PFSTRT13 - 001, NO COMPLETION SECTION IN SMF RECORD'
+         B     GET_COMPLETION_CODE_END              NOT A VALID ADDRESS
+         SPACE
+GET_COMPL_CONT1 EQU *
+         AR    R3,R5                                   ADD BASE ADDRESS
+         USING SMF30CMP,R3                   MAP THE COMPLETION SECTION
+         L     R4,USERTRT                           POINTER TO PFSACTRT
+         USING PFSACTRT,R4                             MAP THE PFSACTRT
+         SPACE
+         MVC   STEPCCE,SMF30SCC        SAVE BINARY RETURN CODE  FIX9801
+         NI    STEPCCE,X'0F'           ZERO HIGH NIBBLE - FLAGS FIX1601
+         SPACE
+         TM    SMF30STI,SMF30ABD                        DID STEP ABEND?
+         BO    STEPTERM_ABEND                   YES, PROCESS ABEND CODE
+         TM    SMF30STI,SMF30FLH                      WAS STEP FLUSHED?
+         BO    STEPTERM_FLUSHED                   YES, INDICATE FLUSHED
+         SPACE
+         LH    R1,STEPCCE                       GET RETURN CODE FIX1601
+         CVD   R1,PACKFLD                     CONVERT TO PACKED DECIMAL
+         MVC   STEPCC6,=X'F02120202020'       SET EDIT MASK     FIX0801
+         ED    STEPCC6,PACKFLD+5          SAVE STEP RETURN CODE FIX0801
+         SPACE
+         CLC   JOBMAXCC,STEPCCE    IS THIS HIGHEST RETURN CODE? FIX1601
+         BNL   GET_COMPLETION_CODE_END             NO, LETS NOT SAVE IT
+         MVC   JOBMAXCC,STEPCCE    SAVE NEW HIGHEST RETURN CODE FIX1601
+         MVC   JOBMAXCE,STEPCC             SAVE NEW HIGHEST RETURN CODE
+         MVC   MAXCCSTP,STEPNUM                    SAVE NEW STEP NUMBER
+         B     GET_COMPLETION_CODE_END                  WE ARE NOW DONE
+         SPACE
+STEPTERM_FLUSHED EQU *
+         MVC   STEPCC,=C'FLUSH'
+         B     GET_COMPLETION_CODE_END                  WE ARE NOW DONE
+         SPACE
+STEPTERM_ABEND EQU *
+         CLC   SMF30SCC,=X'0000'                   IS ABEND CODE ZEROS?
+         BE    GET_COMPLETION_CODE_END       YES, DON'T SAVE ABEND CODE
+         MVC   JOBMAXCC,SMF30SCC           ABEND IS HIGHEST RETURN CODE
+         MVC   MAXCCSTP,STEPNUM                  SAVE ABEND STEP NUMBER
+         SPACE
+         TM    SMF30SCC,SMF30UAB                   WAS IT A USER ABEND?
+         BO    SET_USER_ABEND                   YES.GO LOAD ABEND CODE.
+         SPACE
+         UNPK  PACKFLD(5),SMF30SCC(3)     GET FAFBFC (ABC = ABEND CODE)
+         TR    PACKFLD(4),TRTABLE                     TRANSLATE NIBBLES
+         MVC   STEPCC(4),PACKFLD        SAVE INTO STEPCC FIELD  FIX1201
+         MVI   STEPCC,C'S'                        INDICATE SYSTEM ABEND
+         MVC   JOBMAXCE,STEPCC             ABEND IS HIGHEST RETURN CODE
+         B     GET_COMPLETION_CODE_END
+         SPACE
+SET_USER_ABEND EQU *
+*-- TO LOAD THE "USER" ABEND CODE WE MUST USE THE "ICM" INST.  IF WE
+*-- WERE TO USE THE "LH" INST. THE USER ABEND FLAG WOULD CAUSE
+*-- THE HALF-WORD TO BE LOADED AS A NEGATIVE NUMBER
+         SR    R1,R1                      ZERO REGISTER FOR RETURN CODE
+         ICM   R1,3,SMF30SCC                    GET THE USER ABEND CODE
+         SPACE
+         X     R1,=XL4'8000'                   TURN OFF USER ABEND FLAG
+         CVD   R1,PACKFLD                     CONVERT TO PACKED DECIMAL
+         OI    PACKFLD+7,X'0F'                          SET SIGN TO 'F'
+         UNPK  STEPCC+1(4),PACKFLD+5(3)           SAVE STEP RETURN CODE
+         MVI   STEPCC,C'U'                          INDICATE USER ABEND
+         MVC   JOBMAXCE,STEPCC             ABEND IS HIGHEST RETURN CODE
+         SPACE
+GET_COMPLETION_CODE_END EQU *
+         DROP  R3
+         DROP  R4
+         DROP  R5
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+PFSTRT01_WTO EQU *
+*---------------------------------------------------------------------*
+* BUILD AND WRITE WTO MESSAGE "PFSTRT01"                              *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         CLC   STEPNUM,=H'1'                    IS THIS THE FIRST STEP?
+         BNE   PFSTRT01_WTO_CONT1                              NO, SKIP
+         LA    R1,PFSTRT00                      GET ADDRESS OF WTO LIST
+         WTO   MF=(E,(R1))                       WRITE PFSTRT00 MESSAGE
+         SPACE
+PFSTRT01_WTO_CONT1 EQU *
+         MVC   PFSTRT01_WORK(TRT01LGH),PFSTRT01        MOVE IN PFSTRT01
+         MVC   PFSTRT01_JOBNAME,JOBNAME           MOVE JOBNAME INTO MSG
+         MVC   PFSTRT01_JOBSTEP,JOBSTEP           GET JOBSTEP FROM CSCB
+         MVC   PFSTRT01_PROCSTEP,PROCSTEP      GET STEP FROM SMF RECORD
+         MVC   PFSTRT01_RC(5),STEPCC       PUT RETURN CODE INTO MESSAGE
+         LA    R1,PFSTRT01_WORK                 GET ADDRESS OF WTO LIST
+         WTO   MF=(E,(R1))                       WRITE PFSTRT01 MESSAGE
+         SPACE
+*                                                               FIX1002
+*----- CHECK FOR YXXX PRODUCTION JOB, ISSUE HILITE WTO WARNING  FIX1002
+*        CLI   SYSTEMID,C'Y'       IS SYSID = YXXX? XX?         FIX9804
+*        BNE   PFSTRT01_WTO_END                                 FIX1002
+*        SPACE                                                  FIX1002
+*HECK_CLASS EQU *                                               FIX1002
+*        CLI   JOBCLASS,C'P'                            IS JOBCLASS1=0P
+*        BE    CHECK_CONDITION_CODE                             FIX1002
+*        CLI   JOBCLASS,C'S'                            IS JOBCLASS1=0S
+*        BE    CHECK_CONDITION_CODE                             FIX1002
+*        B     PFSTRT01_WTO_END                                 FIX1002
+*        SPACE                                                  FIX1002
+*HECK_CONDITION_CODE EQU *                                      FIX1002
+*        CLC   STEPCCE,=X'0000'                    IS CONDITON CODE1=00
+*        BE    PFSTRT01_WTO_END                                 FIX1002
+*        SPACE                                                  FIX1002
+*        MVC   PFSTRT03_WORK(TRT03LGH),PFSTRT03        MOVE IN PFSTRT03
+*        MVC   PFSTRT03_JOBNAME,JOBNAME           MOVE JOBNAME INTO1MSG
+*        MVC   PFSTRT03_STEPNAME,JOBSTEP          GET JOBSTEP FROMXCSCB
+*        MVC   PFSTRT03_RC(5),STEPCC       PUT RETURN CODE INTO MESSAGE
+*        LA    R1,PFSTRT03_WORK                 GET ADDRESS OF WTOXLIST
+*        WTO   MF=(E,(R1))                       WRITE PFSTRT03 MESSAGE
+*        SPACE                                                  FIX1002
+*FSTRT01_WTO_END EQU *                                          FIX1002
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+PFSTRT02_WTO EQU *
+*---------------------------------------------------------------------*
+* BUILD AND WRITE WTO MESSAGE "PFSTRT02"                              *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         L     R4,USERTRT                           POINTER TO PFSACTRT
+         USING PFSACTRT,R4                             MAP THE PFSACTRT
+         SPACE
+         MVC   PFSTRT02_WORK(TRT02LGH),PFSTRT02        MOVE IN PFSTRT02
+         SPACE
+         MVC   PFSTRT02_JOBNAME,JOBNAME           MOVE JOBNAME INTO MSG
+         MVC   PFSTRT02_HICC,JOBMAXCE       MOVE IN HIGHEST RETURN CODE
+         LA    R1,PFSTRT02_WORK                 GET ADDRESS OF WTO LIST
+         WTO   MF=(E,(R1))                       WRITE PFSTRT02 MESSAGE
+         SPACE
+         DROP  R4
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE1 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   1(LINELGTH-1,R3),0(R3)
+         CLI   TERMTYPE,C'S'                    IS IT STEP TERMINATION?
+         BE    BOX_LINE1_STEP                    IT IS STEP TERMINATION
+         SPACE
+         MVC   50(28,R3),=C' JOB TERMINATION STATISTICS '
+         B     BOX_LINE1_PRINT
+         SPACE
+BOX_LINE1_STEP EQU *
+         MVC   50(29,R3),=C' STEP TERMINATION STATISTICS '
+         SPACE
+BOX_LINE1_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE1_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE2 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+*-- THE FOLLOWING FIELDS ARE COMMON FOR BOTH STEP AND JOB TERMINATION
+         MVC   2(10,R3),=C'JOB NAME :'
+         MVC   13(8,R3),JOBNAME                        MOVE IN JOB NAME
+         MVC   26(9,R3),=C'JES2 ID :'
+         MVC   36(8,R3),JESID                            MOVE IN JES ID
+         SPACE
+         CLI   TERMTYPE,C'S'                    IS IT STEP TERMINATION?
+         BE    BOX_LINE2_STEP                    IT IS STEP TERMINATION
+         SPACE 3
+*-- THE FOLLOWING INSTRUCTIONS WILL BE EXECUTED AT JOB TERMINATION
+*-- INSERT THE LINE CONSTANTS FOR JOB TERMINATION
+         MVC   49(11,R3),=C'JOB CLASS :'
+         MVC   61(8,R3),JOBCLASS                      MOVE IN JOB CLASS
+         SPACE
+         MVC   74(19,R3),=C'PERFORMANCE GRP # :'
+         LH    R1,PERFGRP                             LETS WRITE THE
+         LA    R2,94(R3)                              PERFORMANCE GROUP
+         BAL   R14,CONVERT_WHOLE_NUMBER               NUMBER
+         SPACE
+         MVC   102(7,R3),=C'DPRTY :'
+         LH    R1,DPRTY                               LETS WRITE THE
+         LA    R2,110(R3)                             DISPATCHING PRTY
+         BAL   R14,CONVERT_WHOLE_NUMBER               NUMBER
+         B     BOX_LINE2_PRINT
+         SPACE 3
+BOX_LINE2_STEP EQU *
+*-- THE FOLLOWING INSTRUCTIONS WILL BE EXECUTED AT STEP TERMINATION
+*-- INSERT THE LINE CONSTANTS FOR STEP TERMINATION
+         SPACE
+         MVC   49(8,R3),=C'STEP # :'
+         LH    R1,STEPNUM                         LETS WRITE THE
+         LA    R2,58(R3)                          JOB STEP
+         BAL   R14,CONVERT_WHOLE_NUMBER           NUMBER
+         SPACE
+         MVC   68(15,R3),=C'JOB STEP NAME :'
+         MVC   84(8,R3),JOBSTEP                   MOVE IN JOB STEP NAME
+         MVC   97(16,R3),=C'PROC STEP NAME :'
+         MVC   114(8,R3),PROCSTEP                     MOVE IN STEP NAME
+         SPACE
+BOX_LINE2_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE2_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE3 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         CLI   TERMTYPE,C'S'                    IS IT STEP TERMINATION?
+         BE    BOX_LINE3_STEP                    IT IS STEP TERMINATION
+         SPACE 3
+*-- THE FOLLOWING INSTRUCTIONS WILL BE EXECUTED AT JOB TERMINATION
+*-- INSERT THE LINE CONSTANTS FOR JOB TERMINATION
+         L     R4,USERTRT                             GET @ TO PFSACTRT
+         USING PFSACTRT,R4                             MAP THE PFSACTRT
+         SPACE
+         MVC   2(12,R3),=C'HIGHEST CC :'
+         MVC   15(5,R3),JOBMAXCE                         MOVE IN MAX CC
+         SPACE
+         MVC   26(22,R3),=C'HIGHEST CC IN STEP # :'
+         LH    R1,MAXCCSTP                            LETS WRITE THE
+         LA    R2,49(R3)                              MAX CC STEP
+         BAL   R14,CONVERT_WHOLE_NUMBER               NUMBER
+         DROP  R4
+         B     BOX_LINE3_PRINT
+         SPACE 3
+BOX_LINE3_STEP EQU *
+*-- THE FOLLOWING INSTRUCTIONS WILL BE EXECUTED AT STEP TERMINATION
+*-- INSERT THE LINE CONSTANTS FOR STEP TERMINATION
+         MVC   2(10,R3),=C'PGM NAME :'
+         MVC   13(8,R3),PGMNAME                    MOVE IN PROGRAM NAME
+         MVC   26(9,R3),=C'STEP CC :'
+         MVC   36(5,R3),STEPCC                  MOVE IN STEP COMPL CODE
+         SPACE
+         MVC   49(34,R3),=C'DEVICE ALLOCATION TIME (SECS)    :'
+         L     R1,DEVALLOC                   GET DEVICE ALLOCATION TIME
+         LA    R2,84(R3)                                 LETS PRINT THE
+         BAL   R14,CONVERT_DECIMAL_NUMBER                    TIME VALUE
+         SPACE
+         MVC   96(17,R3),=C'STEP TIME (MIN) :'
+         L     R1,ELAPSEDT                  GET ELPASED WALL CLOCK TIME
+         LA    R2,114(R3)                                LETS PRINT THE
+         BAL   R14,CONVERT_DECIMAL_NUMBER                    TIME VALUE
+         SPACE
+BOX_LINE3_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE3_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE4 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   6(13,R3),=C'MISC ACTIVITY'
+         MVI   25(R3),C'|'
+         MVC   32(20,R3),=C'PROCESSOR ACCOUNTING'
+         MVI   61(R3),C'|'
+         MVC   67(18,R3),=C'STORAGE AND PAGING'
+         MVI   93(R3),C'|'
+         MVC   104(11,R3),=C'PERFORMANCE'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE4_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE5 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(10,R3),=C'SYSIN    :'
+         MVI   25(R3),C'|'
+         MVC   27(19,R3),=C'STEP CPU TCB SECS :'
+         CLI   TERMTYPE,C'J'                     IS IT JOB TERMINATION?
+         BNE   BOX_LINE5_TEST1
+         MVC   27(4,R3),=C'JOB '                 RELABEL FIELD AS "JOB"
+BOX_LINE5_TEST1 EQU *
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'AUX. PAGE IN  :'
+         MVI   93(R3),C'|'
+         MVC   95(18,R3),=C'CPU   SRVC UNITS :'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,STPSYSI                             LETS WRITE THE
+         LA    R2,13(R3)                              SYSIN TOTAL
+         BAL   R14,CONVERT_WHOLE_NUMBER               NUMBER
+         SPACE
+         L     R1,SCPUTCB                             STEP CPU TCB TIME
+         LA    R2,47(R3)
+         BAL   R14,CONVERT_DECIMAL_NUMBER
+         SPACE
+         L     R1,AUXPAGEI                                AUX. PAGE INS
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+         L     R1,CPUSRVC                             CPU SERVICE UNITS
+         LA    R2,114(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+BOX_LINE5_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE5_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE6 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(10,R3),=C'SYSOUT   :'
+         MVI   25(R3),C'|'
+         MVC   27(19,R3),=C'STEP CPU SRB SECS :'
+         CLI   TERMTYPE,C'J'                     IS IT JOB TERMINATION?
+         BNE   BOX_LINE6_TEST1
+         MVC   27(4,R3),=C'JOB '                 RELABEL FIELD AS "JOB"
+BOX_LINE6_TEST1 EQU *
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'AUX. PAGE OUT :'
+         MVI   93(R3),C'|'
+         MVC   95(18,R3),=C'SRB   SRVC UNITS :'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,STPSYSO                             LETS WRITE THE
+         LA    R2,13(R3)                              SYSOUT TOTAL
+         BAL   R14,CONVERT_WHOLE_NUMBER               NUMBER
+         SPACE
+         L     R1,SCPUSRB                             STEP CPU SRB TIME
+         LA    R2,47(R3)
+         BAL   R14,CONVERT_DECIMAL_NUMBER
+         SPACE
+         L     R1,AUXPAGEO                               AUX. PAGE OUTS
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+         L     R1,SRBSRVC                             SRB SERVICE UNITS
+         LA    R2,114(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+BOX_LINE6_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE6_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE7 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVI   25(R3),C'|'
+         MVC   27(19,R3),=C'STEP ZIIP SECS    :'
+         CLI   TERMTYPE,C'J'             IS IT JOB TERMINATION? FIX2101
+         BNE   BOX_LINE7_TEST1                                  FIX2101
+         MVC   27(4,R3),=C'JOB '         RELABEL FIELD AS "JOB" FIX2101
+BOX_LINE7_TEST1 EQU *                                           FIX2101
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'PAGE INS      :'
+         MVI   93(R3),C'|'
+         MVC   95(18,R3),=C'I/O   SRVC UNITS :'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+*        L     R1,STPSYSP                             LETS WRITE THE
+*        LA    R2,13(R3)                              SYSPUNCH TOTAL
+*        BAL   R14,CONVERT_WHOLE_NUMBER               NUMBER
+         SPACE
+         L     R1,ZIIPSECS                                    ZIIP SECS
+         LA    R2,47(R3)
+         BAL   R14,CONVERT_DECIMAL_NUMBER
+         SPACE
+         L     R1,PAGEINS                                      PAGE INS
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+         L     R1,IOSRVC                              I/O SERVICE UNITS
+         LA    R2,114(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+BOX_LINE7_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE7_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE8 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(12,R3),=C'ZEDC REQ   :'
+         MVI   25(R3),C'|'
+         MVC   27(19,R3),=C'INIT CPU TCB SECS :'
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'PAGE OUTS     :'
+         MVI   93(R3),C'|'
+         MVC   95(18,R3),=C'MSO   SRVC UNITS :'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,EDCCMPRQ                            LETS WRITE THE
+         LA    R2,15(R3)                              ZEDC REQUESTS
+         BAL   R14,CONVERT_WHOLE_NUMBER               NUMBER
+         SPACE
+         L     R1,ICPUTCB                             INIT CPU TCB SECS
+         LA    R2,47(R3)
+         BAL   R14,CONVERT_DECIMAL_NUMBER
+         SPACE
+         L     R1,PAGEOUTS                                    PAGE OUTS
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+         L     R1,MSOSRVC                             MSO SERVICE UNITS
+         LA    R2,114(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+BOX_LINE8_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE8_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE9 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(12,R3),=C'GB UCMP IN :'
+         MVI   25(R3),C'|'
+         MVC   27(19,R3),=C'INIT CPU SRB SECS :'
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'PHYSICAL SWAPS:'
+         MVI   93(R3),C'|'
+         MVC   95(18,R3),=C'TOTAL SRVC UNITS :'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,EDCUCMPI                            LETS WRITE THE
+         LA    R2,15(R3)                             GB UNCOMPRESSED IN
+         BAL   R14,CONVERT_DECIMAL_NUMBER             NUMBER
+         SPACE
+         L     R1,ICPUSRB                             INIT CPU SRB SECS
+         LA    R2,47(R3)
+         BAL   R14,CONVERT_DECIMAL_NUMBER
+         SPACE
+         L     R1,PHYSWAP                                PHYSICAL SWAPS
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+         L     R1,TOTSRVC                           TOTAL SERVICE UNITS
+         LA    R2,114(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+BOX_LINE9_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE9_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE10 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(12,R3),=C'GB CMPR OUT:'
+         MVI   25(R3),C'|'
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'PRIVATE  STRG :'
+         MVI   93(R3),C'|'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,EDCCMPO                             LETS WRITE THE
+         LA    R2,15(R3)                              GB COMPRESSED OUT
+         BAL   R14,CONVERT_DECIMAL_NUMBER             NUMBER
+         SPACE
+         L     R1,USERSTRG                       ALLOCATED USER STORAGE
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         AR    R2,R15                               POINT PASSED NUMBER
+         MVI   0(R2),C'K'                             INDICATE 1K UNITS
+         SPACE
+BOX_LINE10_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE10_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE11 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(12,R3),=C'GB CMPR IN :'
+         MVI   25(R3),C'|'
+         MVC   27(19,R3),=C'ZEDC EXEC SECS    :'
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'LSQA/SWA STRG :'
+         MVI   93(R3),C'|'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,EDCCMPI                             LETS WRITE THE
+         LA    R2,15(R3)                               GB COMPRESSED IN
+         BAL   R14,CONVERT_DECIMAL_NUMBER             NUMBER
+         SPACE
+         L     R1,EDCCMPXT                          ZEDC CMPR EXEC SECS
+         LA    R2,47(R3)
+         BAL   R14,CONVERT_DECIMAL_NUMBER
+         SPACE
+         L     R1,SYSSTRG                      ALLOCATED SYSTEM STORAGE
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         AR    R2,R15                               POINT PASSED NUMBER
+         MVI   0(R2),C'K'                             INDICATE 1K UNITS
+         SPACE
+BOX_LINE11_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE11_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE12 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(12,R3),=C'GB UCMP OUT:'
+         MVI   25(R3),C'|'
+         MVC   27(19,R3),=C'ZEDC QUEUE SECS   :'
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'DATASPCE STRG :'
+         MVI   93(R3),C'|'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,EDCUCMPO                            LETS WRITE THE
+         LA    R2,15(R3)                            GB UNCOMPRESSED OUT
+         BAL   R14,CONVERT_DECIMAL_NUMBER             NUMBER
+         SPACE
+         L     R1,EDCCMPQT                         ZEDC CMPR QUEUE SECS
+         LA    R2,47(R3)
+         BAL   R14,CONVERT_DECIMAL_NUMBER
+         SPACE
+         L     R1,DSPCSTRG                            DATASPACE STORAGE
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         AR    R2,R15                               POINT PASSED NUMBER
+         MVI   0(R2),C'M'                             INDICATE 1K UNITS
+         SPACE
+BOX_LINE12_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE12_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE13 EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         SPACE
+*-- INSERT THE LINE CONSTANTS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVI   25(R3),C'|'
+         MVI   61(R3),C'|'
+         MVC   63(15,R3),=C'REGION SIZE   :'
+         MVI   93(R3),C'|'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         SPACE
+         L     R1,RGNSTRG                                   REGION SIZE
+         LA    R2,79(R3)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         AR    R2,R15                               POINT PASSED NUMBER
+         MVI   0(R2),C'K'                             INDICATE 1K UNITS
+         SPACE
+BOX_LINE13_PRINT EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE13_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE_EXCP_UNIT EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*    R4  - BASE ADDRESS FOR SMF RECORD HEADER                         *
+*    R5  - COUNTER FOR EXCP SECTIONS                                  *
+*    R6  - BASE ADDRESS FOR AN EXCP SECTION                           *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         L     R4,ORGR1SVE                     GET ORIGINAL R1 CONTENTS
+         USING R1PARMS,R4
+         L     R4,R1SMFREC                              @ TO SMF RECORD
+         DROP  R4
+         USING SMFRCD30,R4
+         LH    R5,SMF30EON                  GET NUMBER OF EXCP SECTIONS
+         LTR   R5,R5                      ARE THERE ZERO EXCP SECTIONS?
+         BZ    BOX_LINE_EXCP_UNIT_END               YES, LETS LEAVE NOW
+         L     R6,SMF30EOF                  GET OFFSET TO EXCP SECTIONS
+         LTR   R6,R6                                    IS OFFSET ZERO?
+         BZ    BOX_LINE_EXCP_UNIT_END               YES, LETS LEAVE NOW
+         AR    R6,R4                                   ADD BASE ADDRESS
+         USING SMF30EXP,R6
+         SPACE 3
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   2(15,R3),=C'EXCPS BY DEVICE'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   11(4,R3),=C'ADDR'
+         MVC   18(6,R3),=C'VOLSER'
+         MVC   27(4,R3),=C'TYPE'
+         MVC   34(6,R3),=C'DDNAME'
+         MVC   45(5,R3),=C'EXCPS'
+         MVI   64(R3),C'|'
+         MVC   73(4,R3),=C'ADDR'
+         MVC   80(6,R3),=C'VOLSER'
+         MVC   89(4,R3),=C'TYPE'
+         MVC   96(6,R3),=C'DDNAME'
+         MVC   107(5,R3),=C'EXCPS'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE 3
+*-- WE NOW MUST ALLOCATE SOME STORAGE WHICH WILL BE USED TO
+*-- ACCUMULATE EXCPS FOR ALL DEVICES LISTED AT STEP TERMINATION.
+         GETMAIN R,LV=DEVTABLE_LGTH,SP=SUBPOOL   STORAGE FOR DEV ACCUMS
+         ST    R1,STPDEVTB                         SAVE ADDR OF STORAGE
+         MVC   0(DEVTABLE_LGTH,R1),DEVTABLE          INITIALIZE STORAGE
+         USING DEVACCUM,R8
+         SPACE
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVI   64(R3),C'|'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         LA    R7,11(R3)             INIT R7 FOR DISPLACEMENT INTO LINE
+         SPACE
+NEXT_DEVICE EQU *
+         L     R8,STPDEVTB                    GET @ TO STEP ACCUM TABLE
+         L     R9,SMF30BLK                    GET EXCPS FOR THIS DEVICE
+         LTR   R9,R9                            IS THE EXCP COUNT ZERO?
+         BZ    SKIP_DEVICE_CHECK
+CHECK_DEVICE EQU *
+         CLC   DEVTYPE,SMF30DEV        DID WE FIND A DEVICE TYPE MATCH?
+         BE    DEVICE_FOUND                        YES, LETS PROCESS IT
+         CLC   DEVTYPE,=X'FFFF'         ARE WE AT THE END OF THE TABLE?
+         BE    DEVICE_FOUND                            YES, USER "OTHR"
+         LA    R8,DEVACCUM_LGTH(R8)                 POINT TO NEXT ENTRY
+         B     CHECK_DEVICE
+         SPACE
+DEVICE_FOUND EQU *
+         A     R9,DEVEXCP                        ADD CURRENT STEP TOTAL
+         ST    R9,DEVEXCP                           SAVE NEW STEP TOTAL
+         SPACE
+*-- BECAUSE THE UNPK INST REVERSES THE NIBBLES IN THE LAST BYTE WE
+*-- WILL UNPK ONE EXTRA BYTE.
+         UNPK  PACKFLD(5),SMF30CUA(3)                 GET DEVICE NUMBER
+         TR    PACKFLD(5),TRTABLE                     TRANSLATE NIBBLES
+         MVC   0(4,R7),PACKFLD                    MOVE IN DEVICE NUMBER
+         SPACE
+         LR    R1,R6                           GET ADDR OF EXCP SECTION
+         LA    R2,7(R7)                   INDICIATE WHERE TO PUT VOLSER
+         BAL   R14,GET_VOLSER                    LETS GO GET THE VOLSER
+         SPACE
+         MVC   16(4,R7),DEVNAME                MOVE IN DEVICE TYPE NAME
+         MVC   23(8,R7),SMF30DDN                         MOVE IN DDNAME
+         SPACE
+         L     R1,SMF30BLK                           MOVE IN EXCP COUNT
+         LA    R2,34(R7)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         SPACE
+         LA    R7,62(R7)                      SET R7 TO NEXT PRINT AREA
+         LR    R2,R7                               LETS CHECK TO SEE IF
+         SR    R2,R3                                R7 HAS MOVED OUT OF
+         C     R2,=F'73'                                THE PRINT AREA.
+         BNH   SKIP_DEVICE_CHECK                   STILL IN PRINT AREA.
+         SPACE
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVI   64(R3),C'|'
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         LA    R7,11(R3)             INIT R7 FOR DISPLACEMENT INTO LINE
+         SPACE
+SKIP_DEVICE_CHECK EQU *
+         AH    R6,SMF30ELN          POINT TO NEXT DEVICE ENTRY  FIX0301
+         BCT   R5,NEXT_DEVICE                             LETS CHECK IT
+         LR    R2,R7                               LETS CHECK TO SEE IF
+         SR    R2,R3                             THERE IS DATA TO PRINT
+         C     R2,=F'73'                              ON THE LAST LINE?
+         BL    BOX_LINE_EXCP_UNIT_END                  NO DATA TO PRINT
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE_EXCP_UNIT_END EQU *
+         MVI   0(R3),C' '          WE MUST NOW MAKE SURE THAT THE PRINT
+         MVC   1(LINELGTH-1,R3),0(R3)        LINE CONTAINS ONLY BLANKS.
+         DROP  R4                FIX0301: MOVED FROM EARLIER IN ROUTINE
+         DROP  R6
+         DROP  R8
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE_EXCP_TYPE EQU *
+*---------------------------------------------------------------------*
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         LA    R7,4(R3)                                SET BASE ADDRESS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         MVC   2(20,R3),=C'EXCPS BY DEVICE TYPE'
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         L     R8,STPDEVTB                    GET @ TO STEP ACCUM TABLE
+         USING DEVACCUM,R8
+         SPACE
+EXCP_LOOP EQU *
+         MVC   0(4,R7),DEVNAME
+         MVC   5(7,R7),=C'EXCPS :'
+         L     R1,DEVEXCP
+         LA    R2,13(R7)
+         BAL   R14,CONVERT_WHOLE_NUMBER
+         CLC   DEVTYPE,=X'FFFF'            IS THIS THE LAST DEVICE TYPE
+         BE    EXCP_LOOP_DONE
+         SPACE
+         LA    R8,DEVACCUM_LGTH(R8)                 POINT TO NEXT ENTRY
+         LA    R7,32(R7)                   POINT TO NEXT PRINT POSITION
+         LR    R2,R7                               LETS CHECK TO SEE IF
+         SR    R2,R3                                R7 HAS MOVED OUT OF
+         C     R2,=F'100'                               THE PRINT AREA.
+         BNH   EXCP_LOOP                           STILL IN PRINT AREA.
+         SPACE
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         LA    R7,4(R3)                              RESET BASE ADDRESS
+         MVC   0(1,R3),BOX_CHAR                  MOVE IN FILL CHARACTER
+         MVC   128(1,R3),BOX_CHAR                MOVE IN FILL CHARACTER
+         B     EXCP_LOOP                      CONTINUE WITH NEXT DEVICE
+         SPACE
+EXCP_LOOP_DONE EQU *
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE_EXCP_TYPE_END EQU *
+         DROP  R8
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE96 EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL CREATE A SPECIAL PURPOSE BOX LINE.                *
+*                                                                     *
+*          0  25... 61... 93... 129                                   *
+* EXAMPLE: *---|-----|-----|------*                                   *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVI   0(R3),C'-'                        MOVE IN FILL CHARACTER
+         MVC   1(LINELGTH-1,R3),0(R3)
+         MVC   0(1,R3),BOX_CHAR
+         MVC   128(1,R3),BOX_CHAR
+         MVI   25(R3),C'|'                       MOVE IN FILL CHARACTER
+         MVI   61(R3),C'|'                       MOVE IN FILL CHARACTER
+         MVI   93(R3),C'|'                       MOVE IN FILL CHARACTER
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE96_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE97 EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL CREATE A SPECIAL PURPOSE BOX SECTIONS DIVISION    *
+* LINE.  THE LINE WILL HAVE THE BOX CHAR AT EACH END AND A '-' FILLING*
+* IN THE REST OF THE LINE.                                            *
+*                                                                     *
+*          0  ... ... ...  129                                        *
+* EXAMPLE: *-----------------*                                        *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVI   0(R3),C'-'                        MOVE IN FILL CHARACTER
+         MVC   1(LINELGTH-1,R3),0(R3)
+         MVC   0(1,R3),BOX_CHAR
+         MVC   128(1,R3),BOX_CHAR
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE97_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE98 EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL CREATE A SPECIAL PURPOSE BOX SECTIONS DIVISION    *
+* LINE.  THE LINE WILL HAVE THE BOX CHAR AT EACH END AND BLANKS       *
+* FILLING IN THE REST OF THE LINE.                                    *
+*                                                                     *
+*          0  ... ... ...  129                                        *
+* EXAMPLE: *                 *                                        *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVI   0(R3),C' '                        MOVE IN FILL CHARACTER
+         MVC   1(LINELGTH-1,R3),0(R3)
+         MVC   0(1,R3),BOX_CHAR
+         MVC   128(1,R3),BOX_CHAR
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE98_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+BOX_LINE99 EQU *
+*---------------------------------------------------------------------*
+* THIS ROUTINE WILL CREATE A SPECIAL PURPOSE BOX SECTIONS DIVISION    *
+* LINE.  THE LINE WILL BE COMPOSED COMPLETELY WITH THE BOX CHARACTER  *
+*                                                                     *
+*          0  ... ... ...  129                                        *
+* EXAMPLE: *******************                                        *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R3  - BASE ADDRESS FOR PRINT LINE                                *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVC   0(1,R3),BOX_CHAR
+         MVC   1(LINELGTH-1,R3),0(R3)
+         BAL   R14,PRINT_LINE                         GO PRINT THE LINE
+         SPACE
+BOX_LINE99_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+PRINT_LINE EQU *
+*--------------------------------------------------------------------*
+*  -PRINT-                                                           *
+*     THIS SUBROUTINE WILL CALL 'IEFYS' TO PRINT A LINE OF THE       *
+*     TERMINATION BOXES.                                             *
+*     INPUT:                                                         *
+*       -THE LINE TO BE PRINTED MUST BE CONSTRUCTED IN 'LINE'.       *
+*     OUTPUT:                                                        *
+*       -THE LINE IS PRINTED VIA IEFYS                               *
+*       -THE BODY OF 'LINE' IS CLEARED TO BLANKS BEFORE RETURNING    *
+*     RETURN:                                                        *
+*       -VIA REG 9                                                   *
+*     NOTES:                                                         *
+*        WHEN CALLING IEFYS R12 MUST CONTAIN THE SAME CONTENTS       *
+*        IT HAD ON ENTRY TO IEFACTRT AND R13 MUST POINT TO AN        *
+*        18-WORD WORK AREA.                                          *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R1  - WORK REGISTER                                              *
+*    R12 - POINTER TO IEFYS MESSAGE AREA                              *
+*--------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         L     R12,IEFYSADR               RESTORE R12 TO ENTRY CONTENTS
+         LA    R1,PRNTLINE               GET ADDR OF LINE TO BE PRINTED
+         ST    R1,36(R12)                       AND STORE IN PARM LIST.
+         LA    R1,LINELGTH                       GET LENGTH OF THE LINE
+         STH   R1,42(R12)                        AND STORE IN PARM LIST
+         L     R15,=V(IEFYS)                          GET ADDR OF IEFYS
+         BALR  R14,R15                                GO PRINT THE LINE
+         SPACE
+         LA    R3,PRNTLINE                             SET BASE ADDRESS
+         MVI   PRNTLINE,C' '
+         MVC   PRNTLINE+1(LINELGTH-1),PRNTLINE
+         SPACE
+PRINT_LINE_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+CONVERT_WHOLE_NUMBER EQU *
+*---------------------------------------------------------------------*
+*  THIS ROUTINE WILL CONVERT THE VALUE STORED IN R1 ON INPUT TO       *
+*  A PRINTABLE NUMBER AND STORE IT, LEFT JUSTIFIED, AT THE ADDR       *
+*  IN R2.  THIS ROUTINE CAN CONVERT UP TO A NINE DIGIT NUMBER.        *
+*  THIS ROUTINE ASSUMES THAT THE NUMBER IS A WHOLE INTEGER.           *
+*                                                                     *
+*  UPON RETURN FROM THIS ROUTINE, R15 WILL CONTAIN THE LENGTH OF      *
+*  THE DATA WHEN IT WAS MOVED.                                        *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R1  - CONTAINS THE NUMBER TO BE CONVERTED AND PRINTED            *
+*    R2  - ADDRESS OF THE TARGET LOCATION FOR THE NUMBER.             *
+*    R15 - WORK REGISTER                                              *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         CVD   R1,PACKFLD                      CONVERT NUMBER TO PACKED
+         MVC   EDITAREA(12),=XL12'402020206B2020206B202120' 999,999,999
+         LA    R1,EDITAREA+11                  PREPOINT 'EDMK' REGISTER
+         EDMK  EDITAREA(12),PACKFLD+3        EDIT EXCP COUNT OR INTEGER
+         LA    R15,EDITAREA+11                      CALCULATE LENGTH OF
+         SR    R15,R1                               THE RESULTING FIELD
+         EX    R15,MOVENUM               MOVE RESULT TO REQUESTED FIELD
+         LA    R15,1(R15)                RETURN PROPER LENGTH TO CALLER
+         SPACE
+CONVERT_WHOLE_NUMBER_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         SPACE 3
+MOVENUM  MVC   0(0,R2),0(R1)
+         EJECT
+CONVERT_DECIMAL_NUMBER EQU *
+*---------------------------------------------------------------------*
+*  THIS ROUTINE WILL CONVERT THE TIME VALUE STORED IN R1 ON INPUT TO  *
+*  A PRINTABLE NUMBER AND STORE IT, LEFT JUSTIFIED, AT THE ADDR       *
+*  IN R2.  THIS ROUTINE CAN CONVERT UP TO A NINE DIGIT NUMBER.  WITH  *
+*  TWO DECIMAL PLACES.                                                *
+*                                                                     *
+*  UPON RETURN FROM THIS ROUTINE, R15 WILL CONTAIN THE LENGTH OF      *
+*  THE DATA WHEN IT WAS MOVED.                                        *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R1  - CONTAINS THE NUMBER TO BE CONVERTED AND PRINTED            *
+*    R2  - ADDRESS OF THE TARGET LOCATION FOR THE NUMBER.             *
+*    R15 - WORK REGISTER                                              *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         SPACE
+         CVD   R1,PACKFLD                      CONVERT NUMBER TO PACKED
+         MVC   EDITAREA(13),=XL13'40206B2020206B2021204B2020'
+*                                      9,999,999.99
+         LA    R1,EDITAREA+9                   PREPOINT 'EDMK' REGISTER
+         EDMK  EDITAREA(13),PACKFLD+3        EDIT EXCP COUNT OR INTEGER
+         LA    R15,EDITAREA+12                      CALCULATE LENGTH OF
+         SR    R15,R1                               THE RESULTING FIELD
+         EX    R15,MOVEDEC               MOVE RESULT TO REQUESTED FIELD
+         LA    R15,1(R15)                RETURN PROPER LENGTH TO CALLER
+         SPACE
+CONVERT_DECIMAL_NUMBER_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         SPACE 3
+MOVEDEC  MVC   0(0,R2),0(R1)
+         EJECT
+COMPUTE_ELAPSED_TIME EQU *
+*---------------------------------------------------------------------*
+*  COMPUTE ELAPSED TIME BETWEEN TWO DIFFERENT TIME VALUES             *
+*        INPUT   FIELD "TIMESTRT"  DBL WORD, DATE & TIME OF START     *
+*                FIELD "TIMEEND"   DBL WORD, DATE & TIME OF END       *
+*        OUTPUT  TIMEELAP CONTAINS BINARY ELAPSED TIME                *
+*                                                                     *
+*  EACH INPUT FIELD IS A DOUBLE WORD WITH THE FOLLOWING FORMAT:       *
+*    THE 1ST FOUR BYTES IS THE DATE IN THE FORM CCYYDDDF              *
+*    THE 2ND FOUR BYTES IS THE TIME IN HUNDREDTHS OF A SECOND, BINARY *
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                  SAVE CALLER ON STACK
+         SPACE
+*----- INIT ELAPSED TIME FIELD TO "-1"
+         L     R5,=F'-1'               DEFAULT VALUE
+         ST    R5,TIMEELAP             SAVE ELAPSED TIME
+         SPACE
+*----- LOAD START/END TIME INTO R4/R5
+         L     R4,TIMESTRT+4           GET START TIME
+         L     R5,TIMEEND+4            GET END TIME
+         SPACE
+*----- CONVERT END DATE YEAR TO BINARY VALUE
+         LH    R6,TIMEEND              GET END DATE YEAR X'CCYY'
+         STH   R6,TIMEWORK             SAVE IN WORK FIELD
+         MVC   TIMEWORK+2(1),=XL1'F0'  MOVE IN X'F0', X'CCYYF0'
+         L     R6,TIMEWORK             GET FULL WORD, X'CCYYF000'
+         SRL   R6,12                   SHIFT 12 BITS, X'000CCYYF'
+         XC    TIMEDBL1,TIMEDBL1       CLEAR DOUBLE WORD TO X'00'S
+         ST    R6,TIMEDBL1+4           SAVE IN DOUBLE WORD
+         CVB   R9,TIMEDBL1             CONVERT TO BINARY
+         SPACE
+*----- CONVERT START DATE YEAR TO BINARY VALUE
+         LH    R6,TIMESTRT             GET START DATE YEAR X'CCYY'
+         STH   R6,TIMEWORK             SAVE IN WORK FIELD
+         MVC   TIMEWORK+2(1),=XL1'F0'  MOVE IN X'F0', X'CCYYF0'
+         L     R6,TIMEWORK             GET FULL WORD, X'CCYYF0..'
+         SRL   R6,12                   SHIFT 12 BITS, X'000CCYYF'
+         XC    TIMEDBL1,TIMEDBL1       CLEAR DOUBLE WORD TO X'00'S
+         ST    R6,TIMEDBL1+4           SAVE IN DOUBLE WORD
+         CVB   R8,TIMEDBL1             CONVERT TO BINARY
+         SPACE
+*----- THIS LOGIC WILL HANDLE DIFFERENT YEARS, ASSUME 365 DAY/YEARS
+         SR    R9,R8                   COMPUTE DIFFERENCE
+         M     R8,=F'365'              MULTI. BY 365, ANSWER IS IN R9
+         SPACE
+*----- MOVE THE JULIAN DAYS FOR END DATE INTO R2
+         XC    TIMEDBL1,TIMEDBL1       CLEAR TO X'00'S
+         MVC   TIMEDBL1+6(2),TIMEEND+2 MOVE IN END # OF DAYS
+         CVB   R2,TIMEDBL1             CONVERT TO BINARY
+         SPACE
+*----- MOVE THE JULIAN DAYS FOR START DATE INTO R3
+         XC    TIMEDBL1,TIMEDBL1       CLEAR TO X'00'S
+         MVC   TIMEDBL1+6(2),TIMESTRT+2 MOVE IN START # OF DAYS
+         CVB   R3,TIMEDBL1             CONVERT TO BINARY
+         SPACE
+         AR    R2,R9                   ADD IN # DAYS FROM ABOVE
+         SR    R2,R3                   COMPUTE DAYS FROM START TO END
+         BM    COMPUTE_ELAPSED_TIME_END NEGATIVE DAYS, SOMETHING WRONG
+         BZ    COMPUTE_ELAPSED_CONT1   SAME DAY, NO NEED TO ADD
+         SPACE
+COMPUTE_ELAPSED_ADD EQU *
+         A     R5,HR24                 ADD 24 HRS TO END TIME
+         BCT   R2,COMPUTE_ELAPSED_ADD  KEEP ADDING FOR ALL DAYS
+         SPACE
+COMPUTE_ELAPSED_CONT1 EQU *
+         SR    R5,R4                   GET TIME DIFFERENCE
+         BM    COMPUTE_ELAPSED_TIME_END NEGATIVE TIME, SOMETHING WRONG
+         XR    R4,R4                   CLEAR R4
+         D     R4,=F'60'               CONVERT TO MINUTES
+         ST    R5,TIMEELAP             SAVE ELAPSED TIME
+         SPACE
+COMPUTE_ELAPSED_TIME_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+         EJECT
+GET_VOLSER EQU *
+*---------------------------------------------------------------------*
+*  THIS ROUTINE WILL USE THE UCBSCAN MACRO TO GET THE VOLSER FOR      *
+*  THE SPECIFIED DEVICE.                                              *
+*                                                                     *
+*  UPON RETURN, THE VOLSER FIELD IS LOADED WITH THE VOLSER OR         *
+*  PERIODS (".") IF NO UCB WAS AVAILABLE.                             *
+*                                                                     *
+*  REGISTER USAGE:                                                    *
+*    R1  - ADDRESS OF THE EXCP SECTION.                               *
+*    R2  - ADDRESS OF THE TARGET LOCATION FOR THE NUMBER.             *
+*    R15 - WORK REGISTER                                              *
+*                                                                     *
+*  REWRITTEN TO MAKE USE OF THE UCBSCAN MACRO                   FIX9803
+*---------------------------------------------------------------------*
+         BAKR  R14,R0                              SAVE CALLER ON STACK
+         PUSH  USING
+         USING SMF30EXP,R6
+         SPACE
+UCBSCAN_SERVICE EQU *
+         LA    R8,UCBCOPY                  SET POINTER TO UCB COPY AREA
+         USING UCBOB,R8                              SET ADDRESSABILITY
+         XC    UCBWRKAR,UCBWRKAR           CLEAR UCB WORK AREA TO ZEROS
+         UCBSCAN COPY,UCBAREA=UCBCOPY,WORKAREA=UCBWRKAR,        FIX0001X
+               DEVN=SMF30CUA,DYNAMIC=YES,RANGE=ALL,MF=(E,UCBSCANL)
+         LTR   R15,R15                       HAS A UCB BEEN RETURNED?
+         BNZ   UCB_NOT_FOUND                 NO, SKIP THIS
+         TM    UCBTBYT3,UCB3DACC           IS THIS A DASD UCB?  FIX9901
+         BZ    UCB_NOT_FOUND       IF NOT, NO VOLSER IN THE UCB FIX9901
+*   THE DEVN PARM SPECIFIES WHERE TO START THE SCAN.  VERIFY WE GOT IT.
+         CLC   UCBCHAN,SMF30CUA               IS IT THE DEVICE WE WANT?
+         BNE   UCB_NOT_FOUND                             NO, HANG IT UP
+         MVC   0(6,R2),UCBVOLI                              MOVE VOLSER
+         B     GET_VOLSER_END                          WE CAN LEAVE NOW
+         SPACE
+UCB_NOT_FOUND EQU *
+         MVC   0(6,R2),=C'......'                    USE DEFAULT VOLSER
+         SPACE
+GET_VOLSER_END EQU *
+         PR                                RESTORE AND RETURN TO CALLER
+                                   SPACE
+         DROP  R6
+         DROP  R8
+         POP   USING
+         EJECT
+*--------------------------------------------------------------------*
+*  STORAGE AREAS                                                     *
+*--------------------------------------------------------------------*
+         SPACE 3
+*--------------------------------------------------------------------*
+*  THESE ARE THE PROGRAM CONSTANTS                                   *
+*--------------------------------------------------------------------*
+         SPACE
+CASTR    EQU   C'*'                CONSTANT CHAR '*'
+EDMASK   DC    XL9'40202020214B202020'
+HR24     DC    A(24*60*60*100)            24 HRS IN .01 SECONDS
+JOBCHAR  DC    C'#'                       CHAR FOR JOB  TERMINATION BOX
+STEPCHAR DC    C'*'                       CHAR FOR STEP TERMINATION BOX
+TOVER    DC    F'10000000'         OVERFLOW CONSTANT
+TOVER2   DC    F'1000000000'       OVERFLOW CONSTANT
+         SPACE
+TRTABLE  DC    256X'00'
+         ORG   TRTABLE+240
+         DC    C'0123456789ABCDEF'
+         SPACE 3
+*--------------------------------------------------------------------*
+*  SUPPORTED DEVICE TABLE                                            *
+*  EACH DEVICE ENTRY IS 10 BYTES LONG.  THE FIRST FOUR BYTES IS THE  *
+*  PRINTABLE DEVICE TYPE, THE NEXT FOUR IS AN ACCUMULATION BUCKET    *
+*  FOR THE EXCPS AND THE LAST TWO BYTES ARE THE DEVICE CLASS AND     *
+*  TYPE.                                                             *
+*  TO ADD OR REMOVE SUPPORTED DEVICE TYPES, SIMPLY MODIFY THIS       *
+*  TABLE AND REASSEMBLE THIS EXIT.  THE ONLY RESTRICTION IS THAT     *
+*  THE LAST ENTRY MUST BE LEFT ALONE.                                *
+*--------------------------------------------------------------------*
+         SPACE
+         CNOP  0,4
+DEVTABLE EQU *                THIS IS A TABLE OF SUPPORTED DEVICE TYPES
+         DC    CL4'3380'                               3380 DASD DEVICE
+         DC    F'0'                                    EXCP BUCKET
+         DC    X'200E'                                 DEVICE TYPE
+         DS    BL2                                     RESERVED FIELD
+         SPACE
+         DC    CL4'3390'                               3390 DASD DEVICE
+         DC    F'0'                                    EXCP BUCKET
+         DC    X'200F'                                 DEVICE TYPE
+         DS    BL2                                     RESERVED FIELD
+         SPACE
+         DC    CL4'3420'                               3420 TAPE DEVICE
+         DC    F'0'                                    EXCP BUCKET
+         DC    X'8003'                                 DEVICE TYPE
+         DS    BL2                                     RESERVED FIELD
+         SPACE
+         DC    CL4'3480'                               3480 TAPE DEVICE
+         DC    F'0'                                    EXCP BUCKET
+         DC    X'8080'                                 DEVICE TYPE
+         DS    BL2                                     RESERVED FIELD
+         SPACE
+         DC    CL4'3490'                               3490 TAPE DEVICE
+         DC    F'0'                                    EXCP BUCKET
+         DC    X'8081'                                 DEVICE TYPE
+         DS    BL2                                     RESERVED FIELD
+         SPACE
+         DC    CL4'OTHR'                             ALL OTHER DEVICES
+         DC    F'0'                                    EXCP BUCKET
+         DC    X'FFFF'                                 DEVICE TYPE
+         DS    BL2                                     RESERVED FIELD
+DEVTABLE_LGTH EQU       *-DEVTABLE
+         SPACE 3
+*--------------------------------------------------------------------*
+*  THESE ARE THE WTO'S                                               *
+*--------------------------------------------------------------------*
+         SPACE
+PFSTRT00 WTO   'PFSTRT00 JOBNAME  JOBSTEP  PROCSTEP  RC  ',MF=L
+PFSTRT01 WTO   'PFSTRT01 ........ ........ ........ .....',MF=L
+TRT01LGH EQU   *-PFSTRT01          LENGTH OF PFSTRT01 MESSAGE
+         SPACE
+PFSTRT02 WTO   'PFSTRT02 - JOB ........ ENDED, HIGHEST RC = .....',MF=L
+TRT02LGH EQU   *-PFSTRT02          LENGTH OF PFSTRT02 MESSAGE
+         SPACE
+*                                                             FIX1002
+*FSTRT03 WTO   'WARNING JOB ........ STEP=........ ABENDED CODE=.....',
+*              ROUTCDE=(1),DESC=(2),MF=L                      FIX1002
+*RT03LGH EQU   *-PFSTRT03          LENGTH OF PFSTRT03 MESSAGE FIX1002
+         SPACE
+*--------------------------------------------------------------------*
+*  THESE ARE THE LTORG'S                                             *
+*--------------------------------------------------------------------*
+         SPACE
+         LTORG                          LITERALS
+         $MODEND
+         EJECT
+*--------------------------------------------------------------------*
+*  STORAGE AREAS - "GETMAIN'D" STORAGE                               *
+*--------------------------------------------------------------------*
+         SPACE
+WORKAREA DSECT
+SAVEAREA DS    18F
+ORGR0SVE DS    F                              SAVE AREA FOR ORIGINAL R0
+ORGR1SVE DS    F                              SAVE AREA FOR ORIGINAL R1
+USERTRT  DS    F                      POINTER TO PFSACTRT CONTROL BLOCK
+IEFYSADR DS    F                               @ TO IEFYS MESSAGE AREA.
+STPDEVTB DS    F                            POINTER TO STEP ACCUMULATOR
+*                                                 TABLE FOR ALL DEVICES
+         SPACE
+TERMTYPE DS    CL1                                  STEP OR JOB ID FLAG
+BOX_CHAR DS    CL1                   CHAR USED TO BUILD TERMINATION BOX
+PRNTLINE DS    CL129                            WORKAREA FOR PRINT LINE
+LINELGTH EQU   129                              SYMBOLE FOR LINE LENGTH
+         EJECT
+*--------------------------------------------------------------------*
+*  THE FOLLOWING FIELDS ARE USED TO BUILD THE PFSTRTXX WTO'S AND     *
+*  THE STEP/JOB TERMINATION BOXES.                                   *
+*--------------------------------------------------------------------*
+         SPACE
+         CNOP  0,4                                     ENSURE ALIGNMENT
+ELAPSEDT DS    F                                ELAPSED WALL CLOCK TIME
+SYSTEMID DS    CL4                                            SYSTEM ID
+JOBNAME  DS    CL8
+PGMNAME  DS    CL8
+JESID    DS    CL8
+JOBSTEP  DS    CL8
+PROCSTEP DS    CL8
+JOBCLASS DS    CL8
+STEPCCE  DS    H                            BINARY STEP COMPLETION CODE
+STEPCC6  DS    0CL6                      6 CHARACTER COMPLETION FIX0801
+STEPCCF  DS    C                        FILL CHARACTER FOR EDIT FIX0801
+STEPCC   DS    CL5                                 STEP COMPLETION CODE
+         SPACE
+         CNOP  0,4                                     ENSURE ALIGNMENT
+DEVALLOC DS    F                                 DEVICE ALLOCATION TIME
+         SPACE
+STPSYSI  DS    F                                       STEP SYSIN COUNT
+STPSYSO  DS    F                                      STEP SYSOUT COUNT
+STPSYSP  DS    F                                    STEP SYSPUNCH COUNT
+TAPEOUT  DS    F                                  COUNT OF OUTPUT TAPES
+VIOEXCPS DS    F                                     COUNT OF VIO EXCPS
+         SPACE
+SCPUTCB  DS    F                                      STEP CPU TCB SECS
+SCPUSRB  DS    F                                      STEP CPU SRB SECS
+ICPUTCB  DS    F                                      INIT CPU TCB SECS
+ICPUSRB  DS    F                                      INIT CPU SRB SECS
+ZIIPSECS DS    F                                              ZIIP SECS
+         SPACE
+AUXPAGEI DS    F                                     AUXILIARY PAGE INS
+AUXPAGEO DS    F                                    AUXILIARY PAGE OUTS
+PAGEINS  DS    F                              COUNT OF PAGES SWAPPED IN
+PAGEOUTS DS    F                             COUNT OF PAGES SWAPPED OUT
+PHYSWAP  DS    F                       COUNT OF ADDRSPCE PHYSICAL SWAPS
+USERSTRG DS    F            AMOUNT OF USER ALLOCATED STORAGE (IN BYTES)
+SYSSTRG  DS    F          AMOUNT OF SYSTEM ALLOCATED STORAGE (IN BYTES)
+RGNSTRG  DS    F                                            REGION SIZE
+DSPCSTRG DS    F                           AMOUNT OF DATA SPACE STORAGE
+         SPACE
+CPUSRVC  DS    F                                      CPU SERVICE UNITS
+SRBSRVC  DS    F                                      SRB SERVICE UNITS
+IOSRVC   DS    F                                       IO SERVICE UNITS
+MSOSRVC  DS    F                                      MSO SERVICE UNITS
+TOTSRVC  DS    F                                      TOT SERVICE UNITS
+         SPACE
+EDCUCMPI DS    F                   ZEDC UNCOMPRESSED IN
+EDCCMPO  DS    F                   ZEDC COMPRESSED OUT
+EDCCMPI  DS    F                   ZEDC COMPRESSED IN
+EDCUCMPO DS    F                   ZEDC UNCOMPRESSED OUT
+EDCCMPQT DS    F                   ZEDC QUEUE TIME
+EDCCMPRQ DS    F                   ZEDC # REQUESTS
+EDCCMPXT DS    F                   ZEDC EXEC TIME
+         SPACE
+         CNOP  0,4                                     ENSURE ALIGNMENT
+STEPNUM  DS    H                                            STEP NUMBER
+PERFGRP  DS    H                               PERFORMANCE GROUP NUMBER
+DPRTY    DS    H                                   DISPATCHING PRIORITY
+         EJECT
+*--------------------------------------------------------------------*
+*  THE FOLLOWING IS A 256 BYTE WORK AREA.  IT USED BY MANY DIFFERENT *
+*  TASKS FOR MANY DIFFERENT THINGS.  (ONLY ONE THING AT A TIME)      *
+*--------------------------------------------------------------------*
+         SPACE
+WRKSECTN DS    32D                      32 DOUBLE WORDS (256 BYTES)
+         SPACE
+         ORG   WRKSECTN                 RESET LOCATION COUNTER
+*0----+----1----+----2----+----3----+----4----+----5----+----6----+
+*             JOBNAME  JOBSTEP  PROCSTEP  CC
+*....PFSTRT01 ........ ........ ........ .....
+*
+PFSTRT01_WORK     DS CL256              WORKAREA FOR WTO'S
+         ORG   PFSTRT01_WORK+13
+PFSTRT01_JOBNAME  DS CL8                PFSTRT01 JOB NAME FIELD
+         ORG   PFSTRT01_WORK+22
+PFSTRT01_JOBSTEP  DS CL8                PFSTRT01 JOB STEP FIELD
+         ORG   PFSTRT01_WORK+31
+PFSTRT01_PROCSTEP DS CL8                PFSTRT01 PROC STEP FIELD
+         ORG   PFSTRT01_WORK+40
+PFSTRT01_RC       DS CL5                PFSTRT01 STEP RETURN CODE
+         SPACE 3
+         ORG   WRKSECTN                 RESET LOCATION COUNTER
+*0----+----1----+----2----+----3----+----4----+----5----+----6----+
+*....PFSTRT02 - JOB ........ ENDED, HIGHEST RC = .....
+*
+PFSTRT02_WORK     DS CL256              WORKAREA FOR WTO'S
+         ORG   PFSTRT02_WORK+19
+PFSTRT02_JOBNAME  DS CL8                PFSTRT02 JOB NAME FIELD
+         ORG   PFSTRT02_WORK+48
+PFSTRT02_HICC     DS CL5                PFSTRT02 HIGHEST RETURN CODE
+         SPACE 3
+         ORG   WRKSECTN                 RESET LOCATION COUNTER
+*0----+----1----+----2----+----3----+----4----+----5----+----6----+
+*....WARNING JOB ........ STEP=........ ABENDED CODE=.....
+*
+*                                                             FIX1002
+*FSTRT03_WORK     DS CL256              WORKAREA FOR WTO'S    FIX1002
+*        ORG   PFSTRT03_WORK+16                               FIX1002
+*FSTRT03_JOBNAME  DS CL8                PFSTRT03 JOB NAME FIELDIX1002
+*        ORG   PFSTRT03_WORK+30                               FIX1002
+*FSTRT03_STEPNAME DS CL8                PFSTRT03 STEP NAME FIELDX1002
+*        ORG   PFSTRT03_WORK+52                               FIX1002
+*FSTRT03_RC       DS CL5                PFSTRT03 STEP RETURN CODE1002
+         SPACE 3
+         ORG   WRKSECTN                 RESET LOCATION COUNTER
+PACKFLD  DS    D
+EDITAREA DS    CL16
+         SPACE 3
+         ORG   WRKSECTN                    USED BY COMPUTE_ELAPSED_TIME
+TIMESTRT DS    D
+TIMEEND  DS    D
+TIMEDBL1 DS    D
+TIMEELAP DS    F
+TIMEWORK DS    CL16
+         SPACE 3
+         ORG   WRKSECTN
+UCBWRKAR DS    CL100                     100-BYTE WORK AREA FOR UCBSCAN
+UCBCOPY  DS    F                        COPY OF UCB RETURNED BY UCBSCAN
+         UCBSCAN PLISTVER=MAX,MF=(L,UCBSCANL)         UCBSCAN PARM LIST
+         SPACE 3
+         ORG   ,
+WORKLEN  EQU   *-WORKAREA               LENGTH OF MY WORK AREA
+         EJECT
+*====================================================================*
+*  DSECTS                                                            *
+*====================================================================*
+         SPACE 3
+*--------------------------------------------------------------------*
+*  THIS DSECT MAPS THE PFSACTRT WORK AREA                            *
+*--------------------------------------------------------------------*
+         SPACE
+PFSACTRT DSECT
+PFSACTID DS    CL8
+SYSOUT   DS    F
+SYSPUNCH DS    F
+JOBMAXCC DS    F
+MAXCCSTP DS    H
+JOBMAXCE DS    CL5
+PFSACTLG EQU *-PFSACTRT
+         SPACE 3
+*--------------------------------------------------------------------*
+*  THIS DSECT GIVE ADDRESSABILITY TO A DEVICE ACCUMULATION           *
+*  TABLE ENTRY.                                                      *
+*--------------------------------------------------------------------*
+         SPACE
+DEVACCUM DSECT                  THIS DSECT MAPS THE DEVICE ACCUM TABLE
+DEVNAME  DS    CL4                                         DEVICE NAME
+DEVEXCP  DS    F                                            EXCP COUNT
+DEVTYPE  DS    XL2                                   DEVICE CLASS/TYPE
+         DS    BL2                                     RESERVED FIELD
+DEVACCUM_LGTH EQU *-DEVACCUM            LENGTH OF A DEVICE TABLE ENTRY
+         SPACE 3
+*--------------------------------------------------------------------*
+*  THIS DSECT GIVE ADDRESSABILITY TO THE PARMS PASSED VIE R1.        *
+*--------------------------------------------------------------------*
+         SPACE
+R1PARMS  DSECT                     THIS DSECT MAPS THE PARAMETER LIST
+*                                  POINTED TO BY R1 UPON ENTRY TO EXIT.
+R1COMMON DS    A                   ADDR OF COMMON EXIT PARM AREA
+R1JOBN   DS    A                   ADDR OF 8-BYTE JOB STEP NAME
+R1PGMRN  DS    A                   ADDR OF 20-BYTE PROGRAMMER NAME
+R1JCPU   DS    A                   ADDR OF JOB CPU TIME AND NUM OF ACCT
+*                                  FLDS ON JOB CARD.
+R1JACCT  DS    A                   ADDR OF ACCT FLDS ON JOB CARD.
+R1SCPU   DS    A                   ADDR OF STEP CPU TIME AND NUM OF
+*                                  ACCT FLDS ON THE EXEC STATEMENT.
+R1SACCT  DS    A                   ADDR OF ACCT FLDS ON EXEC STATEMENT
+R1CSTEP# DS    A                   ADDR OF CANCEL FLAG AND STEP NUMBER
+R1COMP   DS    A                   ADDR OF STEP OR JOB COMPLETION CODE
+R1SMFREC DS    A                   ADDR OF SMF REC TYPE 4 OR 5.
+R1JOBCPU DS    A                   ADDR OF 4-BYTE JOB PROCESSOR TIME
+R1STPCPU DS    A                   ADDR OF 4-BYTE STEP PROCESSOR TIME
+R1SUBSYS DS    A                   ADDR OF 4-BYTE SUBSYS NAME   FIX1901
+         EJECT
+         PRINT GEN
+         IFASMFR (30,34)             DSECTS FOR SMF TYPE 30 & 34 RECORD
+         SPACE 3
+         PRINT NOGEN
+         CVT   DSECT=YES                              CVT CONTROL BLOCK
+         SPACE 3
+         IEFJSSIB                                    SSIB CONTROL BLOCK
+         SPACE 3
+         PRINT GEN
+CSCB     DSECT
+         IEECHAIN                                    CSCB CONTROL BLOCK
+         PRINT NOGEN
+         SPACE 3
+LCT      DSECT
+         IEFALLCT                                     LCT CONTROL BLOCK
+         SPACE 3
+         IEZJSCB                                     JSCB CONTROL BLOCK
+         IHAASCB                            ADDRESS SPACE CONTROL BLOCK
+         IHAPSA                                      PREFIXED SAVE AREA
+         IKJTCB                                      TASK CONTROL BLOCK
+         IKJTSB                               TSO TERMINAL STATUS BLOCK
+         IEFUCBOB                                          UCB MACRO ID
+         END   IEFACTRT
+//*
+//L.SYSLMOD    DD DSN=SYS2.LINKLIB,DISP=SHR
+//AOSB3        DD DSN=SYS1.AOSB3,DISP=SHR
+//SYSIN        DD *
+ INCLUDE AOSB3(IEFTB724)
+ ENTRY  IEFACTRT
+ NAME SMFACTRT(R)

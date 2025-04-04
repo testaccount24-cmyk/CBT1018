@@ -1,0 +1,223 @@
+1                     J E S 2  J O B  L O G  --  S Y S T E M  I N S P  --  N O D
+ E  I N J E S P                                      0
+
+                           14.12.48 JOB02999 ---- WEDNESDAY, 28 APR 2021 ----
+
+14.12.48 JOB02999  IRR010I  USERID DATYVA   IS ASSIGNED TO THIS JOB.
+                                                     14.12.56 JOB02999  ICH70001
+I DATYVA   LAST ACCESS AT 12:50:52 ON WEDNESDAY, APRIL 28, 2021
+                          14.12.57 JOB02999  $HASP373 DATYVAED STARTED - INIT 3
+   - CLASS A        - SYS INSP                                                 1
+4.12.57 JOB02999  IEF403I DATYVAED - STARTED - TIME=14.12.57
+                                                    14.13.22 JOB02999  PFSTRT00
+JOBNAME  JOBSTEP  PROCSTEP  RC
+                         14.13.22 JOB02999  PFSTRT01 DATYVAED STEP1
+00000                                                                         14
+.13.22 JOB02999  IEF404I DATYVAED - ENDED - TIME=14.13.22
+                                                   14.13.22 JOB02999  PFSTRT02 -
+ JOB DATYVAED ENDED, HIGHEST RC = 00000
+                        14.13.22 JOB02999  $HASP395 DATYVAED ENDED - RC=0000
+                                                                            0---
+--- JES2 JOB STATISTICS ------
+                                                 -  28 APR 2021 JOB EXECUTION DA
+TE
+                      -           10 CARDS READ
+                                                                           -
+      138 SYSOUT PRINT RECORDS
+                                                -            0 SYSOUT PUNCH RECO
+RDS
+                     -           14 SYSOUT SPOOL KBYTES
+                                                                          -
+    0.42 MINUTES EXECUTION TIME
+                                                        1 //DATYVAED JOB (P,SS,2
+3010),'DALET - IEBCOPY',CLASS=A,                  JOB02999
+                               //       MSGCLASS=R,NOTIFY=DATYVA,REGION=20M
+                       00011000
+    //*                                                                     0001
+1100                                                   2 //STEP1  EXEC PGM=IEBCO
+PY                                               00012000
+                            3 //SYSPRINT DD SYSOUT=*
+                      00013000
+ 4 //INDD    DD DISP=SHR,DSN=SYS1.IXM.SIXMLOD1                             00014
+400                                                   5 //OUTDD   DD DISP=(NEW,D
+ELETE),DSN=DATYVA.TEST.ZEDC,UNIT=SYSDA,         00014500
+                             //   SPACE=(CYL,(500,100),RLSE),DATACLAS=DCPSEXTC
+                     00014678
+6 //SYSIN    DD *                                                         000165
+00                                           ICH70001I DATYVA   LAST ACCESS AT 1
+2:50:52 ON WEDNESDAY, APRIL 28, 2021
+                  IEFA111I DATYVAED IS USING THE FOLLOWING JOB RELATED SETTINGS:
+
+SWA=ABOVE,TIOT SIZE=32K,DSENQSHR=DISALLOW,GDGBIAS=JOB
+                                            IEF236I ALLOC. FOR DATYVAED STEP1
+
+                 IEF237I JES2 ALLOCATED TO SYSPRINT
+                                                                      IEF237I 14
+18 ALLOCATED TO INDD
+                                           IGD17070I DATA SET DATYVA.TEST.ZEDC
+
+                ALLOCATED SUCCESSFULLY WITH 1 STRIPE(S).
+                                                                     IGD17160I D
+ATA SET DATYVA.TEST.ZEDC
+                                          IS ELIGIBLE FOR COMPRESSION
+
+               IGD101I SMS ALLOCATED TO DDNAME (OUTDD   )
+                                                                            DSN
+(DATYVA.TEST.ZEDC                            )
+                                                 STORCLAS (SCPMICT) MGMTCLAS (MC
+BKNMIG) DATACLAS (DCPSEXTC)
+                      VOL SER NOS= ITG4DB
+                                                                   IEF237I JES2
+ALLOCATED TO SYSIN
+                                        IEF142I DATYVAED STEP1 - STEP WAS EXECUT
+ED - COND CODE 0000
+             IEF285I   DATYVA.DATYVAED.JOB02999.D0000102.?          SYSOUT
+                                                                  IEF285I   SYS1
+.IXM.SIXMLOD1                            KEPT
+                                       IEF285I   VOL SER NOS= IRSWT1.
+
+            IGD105I DATYVA.TEST.ZEDC                             DELETED,   DDNA
+ME=OUTDD                                                         IEF285I   DATYV
+A.DATYVAED.JOB02999.D0000101.?          SYSIN
+
+
+           ************************************************** STEP TERMINATION S
+TATISTICS **************************************************    * JOB NAME : DAT
+YVAED     JES2 ID : JOB02999     STEP # : 1         JOB STEP NAME : STEP1
+ PROC STEP NAME :               *    * PGM NAME : IEBCOPY      STEP CC : 00000
+      DEVICE ALLOCATION TIME (SECS)    : 0.03        STEP TIME (MIN) : 0.42
+     *    *---------------------------------------------------------------------
+----------------------------------------------------------*    *     MISC ACTIVI
+TY      |      PROCESSOR ACCOUNTING         |     STORAGE AND PAGING        |
+       PERFORMANCE             *    *------------------------|------------------
+-----------------|-------------------------------|------------------------------
+----*    * SYSIN    : 1           | STEP CPU TCB SECS : 9.67          | AUX. PAG
+E IN  : 0             | CPU   SRVC UNITS : 141,133       *    * SYSOUT   : 66
+       | STEP CPU SRB SECS : 0.30          | AUX. PAGE OUT : 0             | SRB
+   SRVC UNITS : 4,383         *    *                        | STEP ZIIP SECS
+: 0.00          | PAGE INS      : 0             | I/O   SRVC UNITS : 0
+   *    * ZEDC REQ   : 922       | INIT CPU TCB SECS : 0.02          | PAGE OUTS
+     : 0             | MSO   SRVC UNITS : 0             *    * GB UCMP IN : 0.23
+      | INIT CPU SRB SECS : 0.00          | PHYSICAL SWAPS: 0             | TOTA
+L SRVC UNITS : 145,516       *    * GB CMPR OUT: 0.07      |
+               | PRIVATE  STRG : 1,776K        |
+  *    * GB CMPR IN : 0.00      | ZEDC EXEC SECS    : 0.13          | LSQA/SWA S
+TRG : 12,736K       |                                  *    * GB UCMP OUT: 0.00
+     | ZEDC QUEUE SECS   : 0.02          | DATASPCE STRG : 0M            |
+                            *    *                        |
+              | REGION SIZE   : 32,768K       |
+ *    *-------------------------------------------------------------------------
+------------------------------------------------------*    * EXCPS BY DEVICE
+
+                           *    *          ADDR   VOLSER   TYPE   DDNAME     EXC
+PS              |        ADDR   VOLSER   TYPE   DDNAME     EXCPS
+*    *          1418   IRSWT1   3390   INDD       58,265             |        19
+41   ITG4DB   3390   OUTDD      1,274                *    *
+
+                          *    * EXCPS BY DEVICE TYPE
+                                                                               *
+    *   3380 EXCPS : 0                  3390 EXCPS : 59,539             3420 EXC
+PS : 0                  3480 EXCPS : 0              *    *   3490 EXCPS : 0
+             OTHR EXCPS : 0
+                         *    **************************************************
+*******************************************************************************
+   IEF373I STEP/STEP1   /START 2021118.1412
+                                                        IEF032I STEP/STEP1   /ST
+OP  2021118.1413
+                                     CPU:     0 HR  00 MIN  09.67 SEC    SRB:
+  0 HR  00 MIN  00.30 SEC
+          VIRT:  1216K  SYS:   396K  EXT:      560K  SYS:    12340K
+                                                               ATB- REAL:
+           4116K  SLOTS:                     0K
+                                         VIRT- ALLOC:      15M SHRD:       0M
+
+
+                                                      ##########################
+######################## JOB TERMINATION STATISTICS ############################
+#######################    # JOB NAME : DATYVAED     JES2 ID : JOB02999     JOB
+CLASS : A            PERFORMANCE GRP # : 0       DPRTY : 0                 #
+# HIGHEST CC : 00000      HIGHEST CC IN STEP # : 1
+                                                #    #--------------------------
+--------------------------------------------------------------------------------
+---------------------#    #     MISC ACTIVITY      |      PROCESSOR ACCOUNTING
+       |     STORAGE AND PAGING        |          PERFORMANCE             #    #
+------------------------|-----------------------------------|-------------------
+------------|----------------------------------#    # SYSIN    : 1           | J
+OB  CPU TCB SECS : 9.67          | AUX. PAGE IN  : 0             | CPU   SRVC UN
+ITS : 141,133       #    # SYSOUT   : 71          | JOB  CPU SRB SECS : 0.30
+      | AUX. PAGE OUT : 0             | SRB   SRVC UNITS : 4,383         #    #
+                       | JOB  ZIIP SECS    : 0.00          | PAGE INS      : 0
+           | I/O   SRVC UNITS : 0             #    # ZEDC REQ   : 922       | IN
+IT CPU TCB SECS : 0.02          | PAGE OUTS     : 0             | MSO   SRVC UNI
+TS : 0             #    # GB UCMP IN : 0.23      | INIT CPU SRB SECS : 0.00
+     | PHYSICAL SWAPS: 0             | TOTAL SRVC UNITS : 145,516       #    # G
+B CMPR OUT: 0.07      |                                   | PRIVATE  STRG : 1,77
+6K        |                                  #    # GB CMPR IN : 0.00      | ZED
+C EXEC SECS    : 0.13          | LSQA/SWA STRG : 12,736K       |
+                  #    # GB UCMP OUT: 0.00      | ZEDC QUEUE SECS   : 0.02
+    | DATASPCE STRG : 0M            |                                  #    #
+                     |                                   | REGION SIZE   : 32,76
+8K       |                                  #    ###############################
+################################################################################
+##################    IEF375I  JOB/DATYVAED/START 2021118.1412
+                                                                           IEF03
+3I  JOB/DATYVAED/STOP  2021118.1413
+                                                        CPU:     0 HR  00 MIN  0
+9.67 SEC    SRB:     0 HR  00 MIN  00.30 SEC
+                    1                                         IEBCOPY MESSAGES A
+ND CONTROL STATEMENTS                              PAGE     1            -IEB113
+5I IEBCOPY  FMID HDZ2230  SERVICE LEVEL UA92265  DATED 20170618 DFSMS 02.03.00 z
+/OS    02.03.00 HBB77B0  CPU 3907              IEB1035I DATYVAED  STEP1    14:12
+:57 WED 28 APR 2021 PARM=''
+                   - COPY    INDD=INDD,OUTDD=OUTDD
+            00017100                                                    0IEB1013
+I COPYING FROM PDSE  INDD=INDD     VOL=IRSWT1 DSN=SYS1.IXM.SIXMLOD1
+                                              IEB1014I           TO PDSU OUTDD=O
+UTDD    VOL=ITG4DB DSN=DATYVA.TEST.ZEDC
+                   IGW01551I MEMBER IXMDD57  HAS BEEN UNLOADED
+                                                                        IGW01551
+I MEMBER IXMDD7A  HAS BEEN UNLOADED
+                                             IGW01551I MEMBER IXMI38DA HAS BEEN
+UNLOADED
+                  IGW01551I MEMBER IXMI38D1 HAS BEEN UNLOADED
+                                                                       IGW01551I
+ MEMBER IXMI38IN HAS BEEN UNLOADED
+                                            IGW01551I MEMBER IXMI38QA HAS BEEN U
+NLOADED
+                 IGW01551I MEMBER IXMI38QC HAS BEEN UNLOADED
+                                                                      IGW01551I
+MEMBER IXMI38QN HAS BEEN UNLOADED
+                                           IGW01551I MEMBER IXMI38UC HAS BEEN UN
+LOADED
+                IGW01551I MEMBER IXMI38XA HAS BEEN UNLOADED
+                                                                     IGW01551I M
+EMBER IXMI38XC HAS BEEN UNLOADED
+                                          IGW01551I MEMBER IXMI38XN HAS BEEN UNL
+OADED
+               IGW01551I MEMBER IXMI38X1 HAS BEEN UNLOADED
+                                                                    IGW01551I ME
+MBER IXMLC21  HAS BEEN UNLOADED
+                                         IGW01551I MEMBER IXMLQ21  HAS BEEN UNLO
+ADED
+              IGW01551I MEMBER IXMLX21  HAS BEEN UNLOADED
+                                                                   IGW01551I MEM
+BER IXMMQG21 HAS BEEN UNLOADED
+                                        IGW01551I MEMBER IXMMSG21 HAS BEEN UNLOA
+DED
+             IGW01551I MEMBER IXMMXG21 HAS BEEN UNLOADED
+                                                                  IGW01551I MEMB
+ER IXMTSQ21 HAS BEEN UNLOADED
+                                       IGW01551I MEMBER IXMTST21 HAS BEEN UNLOAD
+ED
+            IGW01551I MEMBER IXMXAL21 HAS BEEN UNLOADED
+                                                                 IGW01551I MEMBE
+R IXMXAQ21 HAS BEEN UNLOADED
+                                      IGW01551I MEMBER IXM4C57  HAS BEEN UNLOADE
+D
+           IGW01551I MEMBER IXM4C7A  HAS BEEN UNLOADED
+                                                                IGW01551I MEMBER
+ IXM4C7Q  HAS BEEN UNLOADED
+                                     IGW01550I 26 OF 26  MEMBERS WERE UNLOADED
+
+          IEB147I END OF JOB - 0 WAS HIGHEST SEVERITY CODE
+

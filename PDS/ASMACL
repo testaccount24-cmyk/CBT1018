@@ -1,0 +1,36 @@
+//ASMACL   PROC  SRCE=,                 SOURCE DSN
+//             LOAD=,                   OUTPUT LOADLIB DSN
+//             MEM=,                    MEMBER NAME
+//             CPRM=,                   PARM TO ASSEMBLER
+//             LPRM=,                   PARM TO BINDER
+//             MAC1='SYS1.MACLIB',
+//             MAC2='SYS1.MACLIB',
+//             MAC3='SYS1.MACLIB',
+//             MAC4='SYS1.MACLIB'
+//*
+//***   ASMACL
+//* 05/01/97 DTYVAN  CREATED FOR OS/390 SYSTEM
+//*
+//* THIS PROCEDURE RUNS THE HIGH LEVEL ASSEMBLER, LINK-EDITS THE
+//* NEWLY ASSEMBLED PROGRAM.
+//*
+//C        EXEC PGM=ASMA90,PARM='OBJECT,NODECK,&CPRM'
+//SYSLIB   DD  DSN=&MAC1,DISP=SHR
+//         DD  DSN=&MAC2,DISP=SHR
+//         DD  DSN=&MAC3,DISP=SHR
+//         DD  DSN=&MAC4,DISP=SHR
+//SYSUT1   DD  DSN=&&SYSUT1,SPACE=(4096,(240,240),,,ROUND),UNIT=VIO,
+//             DCB=BUFNO=1
+//SYSPRINT DD  SYSOUT=(,)
+//SYSLIN   DD  DSN=&&OBJ,SPACE=(3040,(40,40),,,ROUND),UNIT=VIO,
+//             DISP=(MOD,PASS),
+//             DCB=(BLKSIZE=3040,LRECL=80,RECFM=FBS,BUFNO=1)
+//SYSIN    DD  DSN=&SRCE(&MEM),DISP=SHR
+//L        EXEC PGM=HEWL,PARM='MAP,LET,LIST,NCAL,&LPRM',
+//             COND=(8,LE,C)
+//SYSLIN   DD  DSN=&&OBJ,DISP=(OLD,DELETE)
+//         DD  DDNAME=SYSIN
+//SYSLMOD  DD  DSN=&LOAD(&MEM),DISP=SHR
+//SYSUT1   DD  DSN=&&SYSUT1,SPACE=(1024,(120,120),,,ROUND),UNIT=VIO,
+//             DCB=BUFNO=1
+//SYSPRINT DD  SYSOUT=(,)
